@@ -785,6 +785,103 @@ def compare_candidates(
     return "\n\n".join(points)
 
 
+def compare_multiple(selected_rows: Union[pd.DataFrame, List[Any]]) -> str:
+    """
+    Generates a comparative explanation for multiple candidates.
+
+    - If fewer than 2 candidates: returns a prompt message.
+    - If exactly 2 candidates: delegates to compare_candidates(row_a, row_b).
+    - If 3+ candidates: generates a ranked comparison summary.
+      Sorts the selected candidates by final_score descending, and for each candidate
+      (except the top), adds one sentence naming the main gap vs the one ranked immediately
+      above them. Ends with one summary sentence naming the strongest pick among the group.
+
+    Args:
+        selected_rows: A DataFrame or list of rows/dicts for the selected candidates.
+
+    Returns:
+        Structured comparative explanation string.
+    """
+    if isinstance(selected_rows, pd.DataFrame):
+        rows = [row for _, row in selected_rows.iterrows()]
+    elif isinstance(selected_rows, (list, tuple)):
+        rows = list(selected_rows)
+    else:
+        rows = []
+
+    if len(rows) < 2:
+        return "Select at least 2 candidates to compare."
+
+    if len(rows) == 2:
+        return compare_candidates(rows[0], rows[1])
+
+    # 3+ candidates: Sort descending by final_score
+    sorted_rows = sorted(rows, key=lambda r: float(r.get("final_score", 0.0)), reverse=True)
+    n = len(sorted_rows)
+
+    top_row = sorted_rows[0]
+    top_name = _clean_candidate_label(str(top_row.get("candidate", "Candidate #1")))
+    top_score = float(top_row.get("final_score", 0.0))
+
+    points = []
+    points.append(f"📊 **Ranked Comparison Summary ({n} Candidates)**:")
+    points.append(f"• **{top_name}** (Score: {top_score:.2f}) ranks #1 among the selected group.")
+
+    for i in range(1, n):
+        curr_row = sorted_rows[i]
+        above_row = sorted_rows[i - 1]
+
+        curr_name = _clean_candidate_label(str(curr_row.get("candidate", f"Candidate #{i+1}")))
+        above_name = _clean_candidate_label(str(above_row.get("candidate", f"Candidate #{i}")))
+
+        curr_score = float(curr_row.get("final_score", 0.0))
+        above_score = float(above_row.get("final_score", 0.0))
+
+        # Skill gap analysis: required skills matched by above_row but missing in curr_row
+        req_above = set(above_row.get("matched_required", []))
+        matched_curr = set(curr_row.get("matched_required", []))
+        skill_gaps = req_above - matched_curr
+
+        kw_above = float(above_row.get("keyword_score", 0.0))
+        kw_curr = float(curr_row.get("keyword_score", 0.0))
+        sem_above = float(above_row.get("semantic_score", 0.0))
+        sem_curr = float(curr_row.get("semantic_score", 0.0))
+
+        if skill_gaps:
+            fmt_gaps = _format_skill_list(sorted(skill_gaps))
+            gap_reason = f"primarily due to missing {fmt_gaps} experience"
+        elif kw_above > kw_curr + 0.03:
+            gap_reason = f"due to lower verified technical proficiency weighting ({kw_curr:.1%} vs {kw_above:.1%})"
+        elif sem_above > sem_curr + 0.03:
+            gap_reason = f"due to lower semantic project alignment with the role ({sem_curr:.1%} vs {sem_above:.1%})"
+        elif curr_score < above_score:
+            diff_pts = round((above_score - curr_score) * 100, 1)
+            gap_reason = f"by {diff_pts:.1f} points across combined technical and qualitative criteria"
+        else:
+            gap_reason = "with comparable prerequisite coverage and equal overall score"
+
+        if curr_score == above_score:
+            points.append(
+                f"• **{curr_name}** (Score: {curr_score:.2f}) is tied with {above_name}."
+            )
+        else:
+            points.append(
+                f"• **{curr_name}** (Score: {curr_score:.2f}) trails {above_name} {gap_reason}."
+            )
+
+    runner_up_score = float(sorted_rows[1].get("final_score", 0.0))
+    lead_margin = round((top_score - runner_up_score) * 100, 1)
+    margin_str = f" (leading the nearest contender by {lead_margin:.1f} points)" if lead_margin > 0 else ""
+
+    summary_sentence = (
+        f"🏆 **Summary**: Among the {n} compared candidates, **{top_name}** is the strongest pick "
+        f"overall with a top score of {top_score:.2f}{margin_str}."
+    )
+    points.append(summary_sentence)
+
+    return "\n\n".join(points)
+
+
 def extract_two_candidates_from_query(
     query: str,
     candidates: List[str],

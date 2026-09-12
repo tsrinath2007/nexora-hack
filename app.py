@@ -21,6 +21,7 @@ from explain import (
     generate_top3_explanations,
     recommend_best_fit,
     compare_candidates,
+    compare_multiple,
     extract_two_candidates_from_query,
     _clean_candidate_label,
 )
@@ -845,43 +846,31 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
             )
 
     st.markdown("##### 🔍 Or Select Candidates Directly to Compare")
-    comp_col1, comp_col2 = st.columns(2)
-    with comp_col1:
-        selected_a = st.selectbox(
-            "Select Candidate A",
-            options=all_candidate_files,
-            index=0,
-            format_func=lambda c: f"#{all_candidate_files.index(c) + 1}: {_clean_candidate_label(c)}",
-            key="compare_cand_a",
-        )
-    with comp_col2:
-        default_b_idx = 1 if len(all_candidate_files) > 1 else 0
-        selected_b = st.selectbox(
-            "Select Candidate B",
-            options=all_candidate_files,
-            index=default_b_idx,
-            format_func=lambda c: f"#{all_candidate_files.index(c) + 1}: {_clean_candidate_label(c)}",
-            key="compare_cand_b",
-        )
 
-    if selected_a and selected_b:
-        if selected_a == selected_b:
-            st.caption("Please select two different candidates to view a head-to-head comparison.")
-        else:
-            with st.expander(
-                f"⚖️ Head-to-Head Breakdown: {_clean_candidate_label(selected_a)} vs {_clean_candidate_label(selected_b)}",
-                expanded=True,
-            ):
-                row_sel_a = ranked_df[ranked_df["candidate"] == selected_a].iloc[0]
-                row_sel_b = ranked_df[ranked_df["candidate"] == selected_b].iloc[0]
-                dropdown_comparison = compare_candidates(row_sel_a, row_sel_b)
+    default_selected = all_candidate_files[:2] if len(all_candidate_files) >= 2 else all_candidate_files
 
-                p_list_dd = [p.strip() for p in dropdown_comparison.split("\n\n") if p.strip()]
-                p_html_dd = "".join(
-                    f'<div style="margin-bottom: 0.75rem;">{re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", p)}</div>'
-                    for p in p_list_dd
-                )
-                st.markdown(
-                    f'<div class="chat-bubble-response">{p_html_dd}</div>',
-                    unsafe_allow_html=True,
-                )
+    selected_candidates = st.multiselect(
+        "Compare Candidates",
+        options=all_candidate_files,
+        default=default_selected,
+        format_func=lambda c: f"#{all_candidate_files.index(c) + 1}: {_clean_candidate_label(c)}",
+        max_selections=5,
+        help="Select between 2 and 5 candidates for a comparative breakdown.",
+        key="compare_candidates_multiselect",
+    )
+
+    if len(selected_candidates) < 2:
+        st.info("Select at least 2 candidates to compare.")
+    else:
+        selected_rows = [ranked_df[ranked_df["candidate"] == c].iloc[0] for c in selected_candidates]
+        comparison_result = compare_multiple(selected_rows)
+
+        p_list_mult = [p.strip() for p in comparison_result.split("\n\n") if p.strip()]
+        p_html_mult = "".join(
+            f'<div style="margin-bottom: 0.75rem;">{re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", p)}</div>'
+            for p in p_list_mult
+        )
+        st.markdown(
+            f'<div class="chat-bubble-response">{p_html_mult}</div>',
+            unsafe_allow_html=True,
+        )
