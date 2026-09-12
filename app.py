@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 
 import ranker
 try:
@@ -274,6 +275,29 @@ def get_jd_title(jd_name: str, jd_text: str) -> str:
     return "Target Role"
 
 
+def format_chart_candidate_label(filename: str, max_chars: int = 30) -> str:
+    """
+    Cleans and shortens candidate filenames for horizontal chart axis display:
+    - Strips file extensions (.pdf, .docx, .txt, .xml)
+    - Removes common redundant terms ('resume', 'cv')
+    - Converts underscores and hyphens to spaces
+    - Capitalizes if lowercase
+    - Truncates long names gracefully with ellipsis
+    """
+    stem = Path(filename).stem
+    cleaned = re.sub(r"(?i)[_\-\s]*(?:resume|cv)\b", "", stem)
+    cleaned = re.sub(r"(?i)\b(?:resume|cv)[_\-\s]*", "", cleaned)
+    cleaned = cleaned.replace("_", " ").replace("-", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        cleaned = Path(filename).stem
+    if cleaned.islower():
+        cleaned = cleaned.title()
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[: max_chars - 1] + "…"
+    return cleaned
+
+
 # ==============================================================================
 # 1. File Uploaders
 # ==============================================================================
@@ -494,11 +518,86 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
     st.divider()
 
     # ==============================================================================
-    # 4. Score Distribution Bar Chart
+    # 4. Score Distribution Bar Chart (Horizontal Plotly)
     # ==============================================================================
     st.subheader("📈 Final Score Comparison Across Candidates")
-    chart_data = ranked_df[["candidate", "final_score"]].set_index("candidate")
-    st.bar_chart(chart_data)
+    st.caption("Visual ranking comparison across all evaluated candidates (ordered from highest to lowest score):")
+
+    # Prepare data for horizontal bar chart
+    plot_df = ranked_df.copy()
+    plot_df["rank"] = range(1, len(plot_df) + 1)
+    plot_df["display_name"] = plot_df["candidate"].apply(format_chart_candidate_label)
+
+    # Reverse order so highest-ranked candidate (#1) appears at the top
+    chart_data = plot_df.iloc[::-1].reset_index(drop=True)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=chart_data["final_score"],
+            y=chart_data["display_name"],
+            orientation="h",
+            marker=dict(
+                color="#2dd4a7",
+                line=dict(color="#24c69b", width=1),
+            ),
+            text=[f" {score:.1%}" for score in chart_data["final_score"]],
+            textposition="outside",
+            textfont=dict(
+                color="#e8ecf1",
+                size=12,
+                family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+            ),
+            customdata=list(
+                zip(
+                    chart_data["candidate"],
+                    chart_data["rank"],
+                    chart_data["semantic_score"],
+                    chart_data["keyword_score"],
+                    chart_data["completeness_score"],
+                )
+            ),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Rank: #%{customdata[1]}<br>"
+                "Final Score: <b>%{x:.2%}</b><br>"
+                "Semantic Score: %{customdata[2]:.2%}<br>"
+                "Keyword Score: %{customdata[3]:.2%}<br>"
+                "Completeness: %{customdata[4]}<br>"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    chart_height = max(280, len(chart_data) * 45 + 70)
+    fig.update_layout(
+        paper_bgcolor="#232f42",
+        plot_bgcolor="#1a2332",
+        margin=dict(l=15, r=60, t=25, b=25),
+        height=chart_height,
+        xaxis=dict(
+            title=dict(text="Final Score", font=dict(color="#94a3b8", size=12)),
+            tickformat=".0%",
+            range=[0, 1.08],
+            gridcolor="#2e3e56",
+            zerolinecolor="#2e3e56",
+            tickfont=dict(color="#94a3b8", size=11),
+        ),
+        yaxis=dict(
+            title=None,
+            categoryorder="array",
+            categoryarray=chart_data["display_name"].tolist(),
+            gridcolor="rgba(0,0,0,0)",
+            tickfont=dict(color="#e8ecf1", size=12),
+        ),
+        hoverlabel=dict(
+            bgcolor="#1a2332",
+            bordercolor="#2dd4a7",
+            font=dict(color="#e8ecf1", size=12),
+        ),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 

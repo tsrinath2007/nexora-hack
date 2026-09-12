@@ -6,3 +6,4 @@ pandas
 streamlit
 numpy
 python-docx
+plotly
