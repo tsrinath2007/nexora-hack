@@ -1,0 +1,13 @@
+Job Title: Senior Machine Learning Engineer
+Company: Nexora Tech
+
+Responsibilities:
+- Design and implement machine learning and NLP pipelines.
+- Build scalable Streamlit and FastAPI applications.
+- Experience with sentence-transformers, embeddings, and vector search.
+- Fine-tune LLMs and develop automated evaluation frameworks.
+
+Requirements:
+- Strong proficiency in Python, PyTorch, scikit-learn, and Pandas.
+- 3+ years experience with Information Retrieval and NLP.
+- Familiarity with Git, Docker, and CI/CD.
