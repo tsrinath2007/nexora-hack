@@ -17,7 +17,7 @@ except Exception:
 from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_text_any, dedup_files
 from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
-from explain import generate_top3_explanations
+from explain import generate_top3_explanations, recommend_best_fit
 from resume_quality import check_resume_completeness, extract_email
 
 # Page configuration
@@ -228,6 +228,44 @@ st.markdown(
     .explanation-text {
         flex: 1;
     }
+
+    /* Best Fit Recommendation Banner */
+    .recommendation-card {
+        background: linear-gradient(135deg, rgba(45, 212, 167, 0.08), rgba(35, 47, 66, 0.95));
+        border: 1.5px solid #2dd4a7;
+        border-radius: 12px;
+        padding: 1.25rem 1.5rem;
+        margin-top: 0.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 6px 20px rgba(45, 212, 167, 0.12);
+    }
+    .recommendation-title {
+        color: #2dd4a7;
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-bottom: 0.65rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .recommendation-body {
+        color: #e2e8f0;
+        font-size: 0.96rem;
+        line-height: 1.65;
+        margin-bottom: 0.85rem;
+    }
+    .recommendation-closing {
+        background-color: rgba(45, 212, 167, 0.12);
+        border-left: 3.5px solid #2dd4a7;
+        padding: 0.6rem 0.95rem;
+        border-radius: 0 8px 8px 0;
+        color: #5eead4;
+        font-weight: 600;
+        font-size: 0.94rem;
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -428,6 +466,20 @@ if run_button:
 # ==============================================================================
 if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
     ranked_df: pd.DataFrame = st.session_state["ranked_df"]
+
+    # Best Fit Recommendation Banner
+    best_fit = recommend_best_fit(ranked_df)
+    if best_fit:
+        st.markdown(
+            f"""
+            <div class="recommendation-card">
+                <div class="recommendation-title">🏆 Our Recommendation</div>
+                <div class="recommendation-body">{best_fit.paragraph}</div>
+                <div class="recommendation-closing">✅ {best_fit.closing}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.subheader("📊 Ranked Candidates")
 

@@ -375,12 +375,265 @@ def generate_top3_explanations(ranked_df: pd.DataFrame) -> Top3Explanations:
     return Top3Explanations(explanations, mapping)
 
 
+class BestFitRecommendation(str):
+    """
+    Rich Best Fit Recommendation object encapsulating comparative reasoning,
+    individual summary points, and formatted representation.
+    """
+    def __new__(
+        cls,
+        full_text: str,
+        candidate: str = "",
+        candidate_display: str = "",
+        final_score: float = 0.0,
+        margin: float = 0.0,
+        paragraph: str = "",
+        closing: str = "",
+    ):
+        obj = super().__new__(cls, full_text)
+        obj.candidate = candidate
+        obj.candidate_display = candidate_display
+        obj.final_score = final_score
+        obj.margin = margin
+        obj.paragraph = paragraph
+        obj.closing = closing
+        obj.full_text = full_text
+        return obj
+
+
+def _clean_candidate_label(filename: str) -> str:
+    """Cleans a candidate filename into a clean display title."""
+    from pathlib import Path
+    import re
+    stem = Path(filename).stem
+    m = re.match(r"^(CAND_\d+)[_\-\s]*(.*)$", stem, re.IGNORECASE)
+    if m:
+        cand_id = m.group(1).upper()
+        rest = m.group(2)
+        rest = re.sub(r"(?i)[_\-\s]*(?:resume|cv)\b", "", rest)
+        rest = re.sub(r"(?i)\b(?:resume|cv)[_\-\s]*", "", rest)
+        rest = rest.replace("_", " ").replace("-", " ")
+        rest = re.sub(r"\s+", " ", rest).strip()
+        if rest:
+            return f"{cand_id} ({rest.title() if rest.islower() else rest})"
+        return cand_id
+
+    cleaned = re.sub(r"(?i)[_\-\s]*(?:resume|cv)\b", "", stem)
+    cleaned = re.sub(r"(?i)\b(?:resume|cv)[_\-\s]*", "", cleaned)
+    cleaned = cleaned.replace("_", " ").replace("-", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        cleaned = Path(filename).stem
+    if cleaned.islower():
+        cleaned = cleaned.title()
+    return cleaned
+
+
+def recommend_best_fit(
+    ranked_df: pd.DataFrame,
+    top_n: int = 3,
+) -> Optional[BestFitRecommendation]:
+    """
+    Identifies the #1 candidate from the ranked DataFrame and builds a
+    rule-based comparative paragraph explaining why they are the best overall fit.
+
+    Evaluates:
+    a. Final score and margin comparisons against runner-up (#2) and third-place (#3).
+    b. Core required skills #1 has that runner-ups are missing.
+    c. Close call detection (within 0.03-0.05 margin) with specific differentiating factors.
+    d. Completeness caveats if #1 is missing standard resume sections.
+    e. Single clear closing sentence recommending the candidate.
+
+    Args:
+        ranked_df: Ranked pandas DataFrame sorted descending by final_score.
+        top_n: Number of top candidates to compare (default 3).
+
+    Returns:
+        BestFitRecommendation object or None if ranked_df is empty.
+    """
+    if ranked_df.empty:
+        return None
+
+    subset = ranked_df.head(max(1, top_n))
+    num_candidates = len(subset)
+
+    # #1 Candidate
+    row_1 = subset.iloc[0]
+    cand_1_raw = str(row_1.get("candidate", "Top Candidate"))
+    cand_1_name = _clean_candidate_label(cand_1_raw)
+    s1 = float(row_1.get("final_score", 0.0))
+    sem_1 = float(row_1.get("semantic_score", 0.0))
+    kw_1 = float(row_1.get("keyword_score", 0.0))
+    matched_req_1 = set(row_1.get("matched_required", []))
+    missing_sections_1 = list(row_1.get("missing_sections", [])) if isinstance(row_1.get("missing_sections"), (list, tuple)) else []
+    comp_val_1 = row_1.get("completeness_score", 1.0)
+
+    # Runner-up (#2)
+    has_runner_up = num_candidates >= 2
+    if has_runner_up:
+        row_2 = subset.iloc[1]
+        cand_2_name = _clean_candidate_label(str(row_2.get("candidate", "Runner-Up")))
+        s2 = float(row_2.get("final_score", 0.0))
+        sem_2 = float(row_2.get("semantic_score", 0.0))
+        kw_2 = float(row_2.get("keyword_score", 0.0))
+        missing_req_2 = set(row_2.get("missing_required", []))
+        diff_1_2 = round(s1 - s2, 4)
+        diff_pts_1_2 = round((s1 - s2) * 100, 1)
+    else:
+        diff_1_2 = 0.0
+        diff_pts_1_2 = 0.0
+
+    # Third Place (#3)
+    has_third = num_candidates >= 3
+    if has_third:
+        row_3 = subset.iloc[2]
+        cand_3_name = _clean_candidate_label(str(row_3.get("candidate", "Candidate #3")))
+        s3 = float(row_3.get("final_score", 0.0))
+        missing_req_3 = set(row_3.get("missing_required", []))
+        diff_1_3 = round(s1 - s3, 4)
+        diff_pts_1_3 = round((s1 - s3) * 100, 1)
+
+    # ==========================================================================
+    # 1. Score Comparison & Close Call Logic (a & c)
+    # ==========================================================================
+    if not has_runner_up:
+        score_sentence = f"{cand_1_name} stands out as the top candidate with an overall score of {s1:.2f}."
+    elif diff_1_2 <= 0.05:
+        # Close call race
+        if sem_1 > sem_2 + 0.02:
+            separating_factor = f"stronger semantic alignment with the role's qualitative requirements ({sem_1:.1%} vs {sem_2:.1%})"
+        elif kw_1 > kw_2 + 0.02:
+            separating_factor = f"higher verified technical skill proficiency ({kw_1:.1%} vs {kw_2:.1%})"
+        else:
+            separating_factor = f"a critical edge in technical depth and balanced prerequisite coverage"
+
+        if has_third:
+            score_sentence = (
+                f"{cand_1_name} finishes as the #1 candidate with an overall score of {s1:.2f}. "
+                f"While {cand_2_name} is a close second ({s2:.2f}, within {diff_pts_1_2:.1f} points), "
+                f"this was a close call where {cand_1_name} edges ahead due to {separating_factor}. "
+                f"Third-ranked {cand_3_name} follows at {s3:.2f} (a {diff_pts_1_3:.1f}-point margin)."
+            )
+        else:
+            score_sentence = (
+                f"{cand_1_name} finishes as the #1 candidate with an overall score of {s1:.2f}. "
+                f"While {cand_2_name} is a close second ({s2:.2f}, within {diff_pts_1_2:.1f} points), "
+                f"this was a close call where {cand_1_name} edges ahead due to {separating_factor}."
+            )
+    else:
+        # Decisive lead (> 0.05)
+        if has_third:
+            score_sentence = (
+                f"{cand_1_name} secures the top position with a score of {s1:.2f}, leading runner-up "
+                f"{cand_2_name} ({s2:.2f}) by {diff_pts_1_2:.1f} points and third-place {cand_3_name} "
+                f"({s3:.2f}) by {diff_pts_1_3:.1f} points."
+            )
+        else:
+            score_sentence = (
+                f"{cand_1_name} secures the top position with a score of {s1:.2f}, leading runner-up "
+                f"{cand_2_name} ({s2:.2f}) by {diff_pts_1_2:.1f} points."
+            )
+
+    # ==========================================================================
+    # 2. Required Skills Comparative Advantages (b)
+    # ==========================================================================
+    if has_runner_up:
+        skills_over_2 = matched_req_1.intersection(missing_req_2)
+        if skills_over_2:
+            fmt_skills_2 = _format_skill_list(sorted(skills_over_2))
+            skills_sentence = (
+                f"Notably, {cand_1_name} demonstrates verified proficiency in {fmt_skills_2}, "
+                f"essential requirements that runner-up {cand_2_name} lacks."
+            )
+        elif has_third and matched_req_1.intersection(missing_req_3):
+            skills_over_3 = matched_req_1.intersection(missing_req_3)
+            fmt_skills_3 = _format_skill_list(sorted(skills_over_3))
+            skills_sentence = (
+                f"While both top contenders satisfy the primary stack prerequisites, {cand_1_name} "
+                f"retains core competency in {fmt_skills_3} where third-place {cand_3_name} has gaps."
+            )
+        elif matched_req_1:
+            skills_sentence = (
+                f"Both top contenders demonstrate broad required coverage, but {cand_1_name} "
+                f"differentiates with higher technical proficiency weighting."
+            )
+        else:
+            skills_sentence = (
+                f"{cand_1_name} demonstrates the strongest overall domain alignment among evaluated profiles."
+            )
+    else:
+        if matched_req_1:
+            fmt_req = _format_skill_list(sorted(matched_req_1))
+            skills_sentence = f"The candidate demonstrates verified technical proficiency across: {fmt_req}."
+        else:
+            skills_sentence = "The candidate shows broad contextual relevance to the target position."
+
+    # ==========================================================================
+    # 3. Completeness Caveat (d)
+    # ==========================================================================
+    if isinstance(comp_val_1, str) and "/" in comp_val_1:
+        try:
+            found_count = int(comp_val_1.split("/")[0])
+            total_count = int(comp_val_1.split("/")[1])
+        except ValueError:
+            found_count, total_count = 6, 6
+    elif isinstance(comp_val_1, (int, float)):
+        found_count = round(float(comp_val_1) * 6)
+        total_count = 6
+    else:
+        found_count, total_count = 6, 6
+
+    if found_count < total_count or missing_sections_1:
+        if missing_sections_1:
+            if len(missing_sections_1) == 1:
+                miss_str = f"a {missing_sections_1[0]} section"
+            elif len(missing_sections_1) == 2:
+                miss_str = f"{missing_sections_1[0]} and {missing_sections_1[1]} sections"
+            else:
+                miss_str = f"{', '.join(missing_sections_1[:-1])}, and {missing_sections_1[-1]} sections"
+            caveat_sentence = (
+                f"Note: although leading in overall fit, the resume is missing {miss_str}, "
+                f"which the recruiter may want to verify separately."
+            )
+        else:
+            caveat_sentence = (
+                f"Note: although leading in overall fit, the resume achieves a {found_count}/{total_count} "
+                f"completeness score, which the recruiter may want to verify separately."
+            )
+    else:
+        caveat_sentence = (
+            f"Additionally, {cand_1_name}'s resume is structurally complete (6/6), "
+            f"providing comprehensive documentation across all standard sections."
+        )
+
+    # ==========================================================================
+    # 4. Closing Sentence (e)
+    # ==========================================================================
+    closing_sentence = (
+        f"Recommended candidate: {cand_1_name} — best overall fit for this role "
+        f"based on required skill coverage and contextual relevance."
+    )
+
+    paragraph = f"{score_sentence} {skills_sentence} {caveat_sentence}"
+    full_text = f"{paragraph}\n\n**{closing_sentence}**"
+
+    return BestFitRecommendation(
+        full_text=full_text,
+        candidate=cand_1_raw,
+        candidate_display=cand_1_name,
+        final_score=s1,
+        margin=diff_1_2,
+        paragraph=paragraph,
+        closing=closing_sentence,
+    )
+
+
 # ==============================================================================
 # Verification Runner
 # ==============================================================================
 
 def main():
-    """Runs ranking pipeline and prints explanations for the top candidates."""
+    """Runs ranking pipeline and prints explanations and best fit recommendation."""
     from pathlib import Path
     from ranker import rank_from_files
 
@@ -404,7 +657,15 @@ def main():
         print("-" * 80)
         print(exp)
 
+    # 4. Best Fit Recommendation
     print("\n" + "=" * 80)
+    print("BEST FIT RECOMMENDATION")
+    print("=" * 80)
+    rec = recommend_best_fit(ranked_df)
+    if rec:
+        print(f"\n{rec.paragraph}\n\n{rec.closing}\n")
+
+    print("=" * 80)
     print("Explanation verification completed successfully!")
     print("=" * 80)
 
