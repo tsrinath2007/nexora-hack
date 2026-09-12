@@ -314,17 +314,45 @@ st.markdown(
 )
 
 # Header Section
-st.markdown(
-    """
-    <div class="app-header">
-        <div class="main-title">🌳 <span class="teal-accent">Smart Shortlisting Engine</span></div>
-        <div class="main-subtitle">Upload a Job Description and Candidate Resumes to find the perfect fit.</div>
-        <div class="hackathon-caption">Built for the Nexora Hackathon @ Manipal Institute of Technology, Bengaluru</div>
-        <div class="team-caption">Team: i dont know</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+logo_file = Path(__file__).parent / "assets" / "internloom_logo.png"
+if not logo_file.exists():
+    logo_file = Path("assets/internloom_logo.png")
+
+if logo_file.exists():
+    header_col1, header_col2 = st.columns([1.6, 8.4], vertical_alignment="center")
+    with header_col1:
+        st.image(str(logo_file), width=180)
+    with header_col2:
+        st.markdown(
+            """
+            <div class="main-title" style="margin-bottom: 0; line-height: 1.2;">
+                <span class="teal-accent">Smart Shortlisting Engine</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        """
+        <div class="app-header" style="padding-top: 0.25rem; margin-top: -0.25rem;">
+            <div class="main-subtitle">Upload a Job Description and Candidate Resumes to find the perfect fit.</div>
+            <div class="hackathon-caption">Built for the Nexora Hackathon @ Manipal Institute of Technology, Bengaluru</div>
+            <div class="team-caption">Team: i dont know</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        """
+        <div class="app-header">
+            <div class="main-title">🌳 <span class="teal-accent">Smart Shortlisting Engine</span></div>
+            <div class="main-subtitle">Upload a Job Description and Candidate Resumes to find the perfect fit.</div>
+            <div class="hackathon-caption">Built for the Nexora Hackathon @ Manipal Institute of Technology, Bengaluru</div>
+            <div class="team-caption">Team: i dont know</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown(
     f"""
