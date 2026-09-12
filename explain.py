@@ -391,6 +391,7 @@ class BestFitRecommendation(str):
         margin: float = 0.0,
         paragraph: str = "",
         closing: str = "",
+        points: Optional[List[str]] = None,
     ):
         obj = super().__new__(cls, full_text)
         obj.candidate = candidate
@@ -400,6 +401,7 @@ class BestFitRecommendation(str):
         obj.paragraph = paragraph
         obj.closing = closing
         obj.full_text = full_text
+        obj.points = points or []
         return obj
 
 
@@ -616,8 +618,16 @@ def recommend_best_fit(
         f"based on required skill coverage and contextual relevance."
     )
 
+    points = [
+        score_sentence.strip(),
+        skills_sentence.strip(),
+        caveat_sentence.strip(),
+    ]
+    points = [p for p in points if p]
+
     paragraph = f"{score_sentence} {skills_sentence} {caveat_sentence}"
-    full_text = f"{paragraph}\n\n**{closing_sentence}**"
+    bullet_lines = "\n".join(f"• {p}" for p in points)
+    full_text = f"{bullet_lines}\n\n**{closing_sentence}**"
 
     return BestFitRecommendation(
         full_text=full_text,
@@ -627,6 +637,7 @@ def recommend_best_fit(
         margin=diff_1_2,
         paragraph=paragraph,
         closing=closing_sentence,
+        points=points,
     )
 
 

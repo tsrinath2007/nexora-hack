@@ -262,6 +262,25 @@ st.markdown(
         line-height: 1.65;
         margin-bottom: 0.85rem;
     }
+    .recommendation-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.65rem;
+        margin-bottom: 0.55rem;
+        color: #e2e8f0;
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+    .recommendation-item:last-child {
+        margin-bottom: 0;
+    }
+    .recommendation-bullet {
+        color: #2dd4a7;
+        font-weight: 700;
+        font-size: 1.15rem;
+        line-height: 1.3;
+        flex-shrink: 0;
+    }
     .recommendation-closing {
         background-color: rgba(45, 212, 167, 0.12);
         border-left: 3.5px solid #2dd4a7;
@@ -565,11 +584,26 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
     # Best Fit Recommendation Banner
     best_fit = recommend_best_fit(ranked_df)
     if best_fit:
+        if hasattr(best_fit, "points") and best_fit.points:
+            rec_points = best_fit.points
+        else:
+            rec_points = [s.strip() for s in re.split(r'(?<=[.!?])\s+', best_fit.paragraph) if s.strip()]
+
+        items_html = "".join(
+            f'<div class="recommendation-item">'
+            f'<span class="recommendation-bullet">•</span>'
+            f'<span style="flex: 1;">{p}</span>'
+            f'</div>'
+            for p in rec_points
+        )
+
         st.markdown(
             f"""
             <div class="recommendation-card">
                 <div class="recommendation-title">🏆 Our Recommendation</div>
-                <div class="recommendation-body">{best_fit.paragraph}</div>
+                <div class="recommendation-body">
+                    {items_html}
+                </div>
                 <div class="recommendation-closing">✅ {best_fit.closing}</div>
             </div>
             """,
