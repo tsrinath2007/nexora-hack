@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from parser import extract_jd, extract_text_from_pdf, extract_resumes
-from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
+from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT, COMPLETENESS_WEIGHT
 from explain import generate_top3_explanations
 from resume_quality import check_resume_completeness
 
@@ -20,7 +20,7 @@ st.markdown(
     f"""
     Rank and evaluate candidate resumes against a Job Description using hybrid
     **Semantic Embeddings ({SEMANTIC_WEIGHT * 100:.0f}%)**, **Keyword Matching ({KEYWORD_WEIGHT * 100:.0f}%)**,
-    and **Resume Structural Completeness (X/6 sections)**.
+    and **Resume Completeness ({COMPLETENESS_WEIGHT * 100:.0f}%)**.
     """
 )
 

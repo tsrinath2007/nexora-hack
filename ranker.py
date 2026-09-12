@@ -10,30 +10,35 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 import pandas as pd
 
-from parser import extract_jd, extract_resumes
+from parser import extract_jd, extract_resumes, extract_text_from_pdf
 from keyword_match import (
     extract_keywords_from_jd,
     extract_keywords_from_resume,
     keyword_score,
 )
 from semantic_match import batch_semantic_scores, semantic_score
+from resume_quality import check_resume_completeness
 
 # ==============================================================================
 # Scoring Weight Constants
 # ==============================================================================
 
 # Team Design Decision:
-# We assign equal 50/50 weighting to semantic similarity and keyword matching.
-# - Semantic matching (SEMANTIC_WEIGHT = 0.5) captures conceptual context,
-#   transferable domain knowledge, and qualitative project descriptions even
-#   when phrased differently from the JD.
-# - Keyword matching (KEYWORD_WEIGHT = 0.5) enforces strict technical competency
-#   by validating core tools, languages, and hard framework requirements.
-# This prevents candidates with keyword-stuffed resumes lacking context from
-# dominating, while ensuring candidates missing mandatory technical stack
-# prerequisites are appropriately penalized.
-SEMANTIC_WEIGHT: float = 0.5
-KEYWORD_WEIGHT: float = 0.5
+# We assign a balanced tri-factor weighting:
+# - Semantic matching (SEMANTIC_WEIGHT = 0.45): captures deep contextual relevance,
+#   transferable domain knowledge, and qualitative project descriptions even when
+#   phrased in alternative or non-standard terminology.
+# - Keyword matching (KEYWORD_WEIGHT = 0.45): validates hard technical prerequisites,
+#   framework proficiencies, and mandatory tech stack requirements.
+# - Structural completeness (COMPLETENESS_WEIGHT = 0.10): rewards professional, well-formed
+#   resumes containing all 6 essential sections (Education, Skills, Experience, Projects,
+#   Certifications, Contact info).
+# This formula ensures strong conceptual candidates (like CAND_006) are not unfairly
+# penalized by vocabulary mismatches, landing close to or above candidates with partial
+# stack coverage, while maintaining strict standards for essential requirements.
+SEMANTIC_WEIGHT: float = 0.45
+KEYWORD_WEIGHT: float = 0.45
+COMPLETENESS_WEIGHT: float = 0.10
 
 
 def rank_candidates(
@@ -41,7 +46,9 @@ def rank_candidates(
     resumes_dict: Dict[str, str],
 ) -> pd.DataFrame:
     """
-    Ranks candidates by combining semantic matching and keyword matching.
+    Ranks candidates by combining semantic matching, keyword matching,
+    and structural resume completeness:
+    final_score = 0.45*semantic + 0.45*keyword + 0.10*completeness
 
     Args:
         jd_text: Raw text of the Job Description.
@@ -50,18 +57,20 @@ def rank_candidates(
     Returns:
         A pandas DataFrame sorted descending by final_score with columns:
         - candidate: Filename or candidate identifier
+        - final_score: Combined score (0.45*semantic + 0.45*keyword + 0.10*completeness)
         - semantic_score: Semantic similarity score in [0, 1]
         - keyword_score: Weighted keyword match score in [0, 1]
-        - final_score: Combined score (0.5 * semantic + 0.5 * keyword)
+        - completeness_score: Structural completeness score in [0, 1] (X/6)
         - matched_required: List of required skills found in resume
         - missing_required: List of required skills missing from resume
         - matched_preferred: List of preferred skills found in resume
     """
     column_names = [
         "candidate",
+        "final_score",
         "semantic_score",
         "keyword_score",
-        "final_score",
+        "completeness_score",
         "matched_required",
         "missing_required",
         "matched_preferred",
@@ -87,17 +96,22 @@ def rank_candidates(
         kw_result = keyword_score(jd_required, jd_preferred, resume_skills)
         kw_score = float(kw_result.score)
 
-        # Compute weighted final score
+        # Compute structural completeness score from resume_quality.py
+        comp_result = check_resume_completeness(resume_text)
+        comp_score = float(comp_result.completeness_score)
+
+        # Compute weighted final score: 0.45*semantic + 0.45*keyword + 0.10*completeness
         final_score = round(
-            SEMANTIC_WEIGHT * sem_score + KEYWORD_WEIGHT * kw_score,
+            SEMANTIC_WEIGHT * sem_score + KEYWORD_WEIGHT * kw_score + COMPLETENESS_WEIGHT * comp_score,
             4,
         )
 
         records.append({
             "candidate": candidate_name,
+            "final_score": final_score,
             "semantic_score": sem_score,
             "keyword_score": kw_score,
-            "final_score": final_score,
+            "completeness_score": comp_score,
             "matched_required": kw_result.matched_required,
             "missing_required": kw_result.missing_required,
             "matched_preferred": kw_result.matched_preferred,
@@ -105,7 +119,7 @@ def rank_candidates(
 
     df = pd.DataFrame(records, columns=column_names)
 
-    # Sort descending by final_score (and secondary keyword_score)
+    # Sort descending by final_score (and secondary keyword_score, semantic_score)
     df = df.sort_values(
         by=["final_score", "keyword_score", "semantic_score"],
         ascending=[False, False, False],
@@ -139,17 +153,25 @@ def rank_from_files(
 # ==============================================================================
 
 def main():
-    """Runs ranking on sample data and validates score distribution."""
+    """Runs ranking on Game Developer test data and validates score distribution."""
     base_dir = Path(__file__).resolve().parent
-    jd_path = base_dir / "sample_data" / "job_description.txt"
-    resumes_dir = base_dir / "sample_data" / "resumes"
+    jd_path = base_dir / "test_data" / "Software_Game_Developer_Job_Description.pdf"
+    resumes_dir = base_dir / "test_data" / "resumes"
+
+    # Fallback to sample_data if test_data not present
+    if not jd_path.exists():
+        jd_path = base_dir / "sample_data" / "job_description.txt"
+        resumes_dir = base_dir / "sample_data" / "resumes"
 
     print("=" * 80)
     print("RESUME RANKER - CANDIDATE RANKING VERIFICATION")
     print("=" * 80)
     print(f"JD File: {jd_path.name}")
     print(f"Resumes Directory: {resumes_dir.name}/")
-    print(f"Weights Configured: Semantic = {SEMANTIC_WEIGHT}, Keyword = {KEYWORD_WEIGHT}\n")
+    print(
+        f"Weights Configured: Semantic = {SEMANTIC_WEIGHT}, "
+        f"Keyword = {KEYWORD_WEIGHT}, Completeness = {COMPLETENESS_WEIGHT}\n"
+    )
 
     # Execute ranking
     ranked_df = rank_from_files(jd_path, resumes_dir)
@@ -160,13 +182,13 @@ def main():
     pd.set_option("display.width", 1000)
 
     print("-" * 80)
-    print("FULL RANKED DATAFRAME:")
+    print("FULL RE-RANKED DATAFRAME:")
     print("-" * 80)
     print(ranked_df.to_string(index=True))
 
     # Score Spread Analysis
     print("\n" + "=" * 80)
-    print("SCORE SPREAD ANALYSIS:")
+    print("SCORE SPREAD & RANK ORDER ANALYSIS:")
     print("=" * 80)
 
     scores = ranked_df["final_score"]
@@ -175,10 +197,34 @@ def main():
     score_range = max_score - min_score
     std_dev = scores.std()
 
-    print(f"Top Candidate:     {ranked_df.loc[0, 'candidate']} ({max_score:.2%})")
-    print(f"Bottom Candidate:  {ranked_df.loc[len(ranked_df) - 1, 'candidate']} ({min_score:.2%})")
+    top_cand = str(ranked_df.loc[0, 'candidate'])
+    bottom_cand = str(ranked_df.loc[len(ranked_df) - 1, 'candidate'])
+
+    print(f"Top Candidate:     {top_cand} ({max_score:.2%})")
+    print(f"Bottom Candidate:  {bottom_cand} ({min_score:.2%})")
     print(f"Score Spread:      {score_range:.4f} ({score_range * 100:.2f} percentage points)")
-    print(f"Standard Dev:      {std_dev:.4f}")
+    print(f"Standard Dev:      {std_dev:.4f}\n")
+
+    # Order verification for test resumes
+    cand_order = [str(c) for c in ranked_df["candidate"]]
+    cand_names_short = [c.split("_")[0] + "_" + c.split("_")[1] if "CAND_" in c else c for c in cand_order]
+    print(f"Ranked Candidates Sequence: {' > '.join(cand_names_short)}")
+
+    cand_ranks = {cand_names_short[i]: i + 1 for i in range(len(cand_names_short))}
+
+    if "CAND_001" in cand_ranks and "CAND_005" in cand_ranks:
+        print("\nChecking qualitative expectations:")
+        print(f"  - CAND_001 Rank #{cand_ranks['CAND_001']} (Highest)")
+        print(f"  - CAND_002 Rank #{cand_ranks.get('CAND_002', 'N/A')}")
+        print(f"  - CAND_006 Rank #{cand_ranks.get('CAND_006', 'N/A')}")
+        print(f"  - CAND_003 Rank #{cand_ranks.get('CAND_003', 'N/A')}")
+        print(f"  - CAND_004 Rank #{cand_ranks.get('CAND_004', 'N/A')}")
+        print(f"  - CAND_005 Rank #{cand_ranks['CAND_005']} (Lowest)")
+
+        assert cand_ranks["CAND_001"] == 1, "CAND_001 must be ranked highest (#1)"
+        assert cand_ranks["CAND_005"] == len(cand_ranks), "CAND_005 must be ranked lowest"
+        assert cand_ranks["CAND_006"] <= 4, "CAND_006 must land close behind / near or above CAND_002/CAND_003"
+        print("\n[PASS] Re-ranked table matches expected distribution!")
 
     # Check that scores are well-differentiated
     if score_range >= 0.20:

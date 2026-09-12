@@ -33,7 +33,7 @@ _EDUCATION_HEADER_RE = re.compile(
 # Skills: technical, core, and professional skills
 _SKILLS_HEADER_RE = re.compile(
     r"(?:^|[\r\n\•\-\*\|\#])\s*"
-    r"(?:(?:technical|core|key|professional)?\s*skills?(?:\s*set)?|technologies|"
+    r"(?:(?:technical|core|key|professional)?\s*(?:skills?|strengths?)(?:\s*set)?|technologies|"
     r"tech\s+stack|tools\s*(&|and)\s*technologies|programming\s+languages|"
     r"core\s+competencies|proficiencies|areas\s+of\s+expertise)\s*[:\-\—\–]?",
     re.IGNORECASE,
