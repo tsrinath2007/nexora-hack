@@ -14,3 +14,4 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
+test_data/dummy_resumes/

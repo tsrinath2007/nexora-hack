@@ -11,7 +11,7 @@ try:
 except Exception:
     pass
 
-from parser import extract_jd, extract_text_from_pdf, extract_resumes
+from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_text_any
 from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
 from explain import generate_top3_explanations
@@ -30,6 +30,7 @@ st.markdown(
     Rank and evaluate candidate resumes against a Job Description using hybrid
     **Semantic Embeddings ({SEMANTIC_WEIGHT * 100:.0f}%)**, **Keyword Matching ({KEYWORD_WEIGHT * 100:.0f}%)**,
     and **Resume Completeness ({COMPLETENESS_WEIGHT * 100:.0f}%)**.
+    Supports **PDF**, **DOCX**, **TXT**, and **XML** formats.
     """
 )
 
@@ -43,9 +44,9 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. Job Description")
     jd_file = st.file_uploader(
-        "Upload Job Description (PDF)",
-        type=["pdf"],
-        help="Upload the target job description PDF",
+        "Upload Job Description (PDF, DOCX, TXT, XML)",
+        type=["pdf", "docx", "txt", "xml"],
+        help="Upload the target job description file",
     )
     if jd_file:
         st.success(f"Loaded JD: {jd_file.name}")
@@ -53,10 +54,10 @@ with col1:
 with col2:
     st.subheader("2. Candidate Resumes")
     resume_files = st.file_uploader(
-        "Upload Resumes (PDF, up to 20)",
-        type=["pdf"],
+        "Upload Resumes (PDF, DOCX, TXT, XML - up to 20)",
+        type=["pdf", "docx", "txt", "xml"],
         accept_multiple_files=True,
-        help="Upload up to 20 candidate resume PDFs",
+        help="Upload up to 20 candidate resume files",
     )
     if resume_files:
         if len(resume_files) > 20:
@@ -85,16 +86,16 @@ if run_button:
 
     # Check input sources
     if jd_file and resume_files:
-        with st.spinner("Extracting text from uploaded PDFs..."):
+        with st.spinner("Extracting text from uploaded files..."):
             try:
-                jd_text = extract_text_from_pdf(jd_file)
+                jd_text = extract_jd(jd_file)
             except Exception as e:
-                st.error(f"Error parsing JD PDF: {e}")
+                st.error(f"Error parsing JD file: {e}")
                 st.stop()
 
             for rf in resume_files:
                 try:
-                    text = extract_text_from_pdf(rf)
+                    text = extract_text_any(rf)
                     resumes_dict[rf.name] = text
                 except Exception as e:
                     st.warning(f"Could not parse '{rf.name}': {e}")
