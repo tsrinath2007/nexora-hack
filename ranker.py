@@ -65,6 +65,8 @@ def rank_candidates(
         - matched_required: List of required skills found in resume
         - missing_required: List of required skills missing from resume
         - matched_preferred: List of preferred skills found in resume
+        - skill_weights: Dict mapping skill to proficiency weight
+        - missing_sections: List of missing resume structural sections
     """
     column_names = [
         "candidate",
@@ -76,6 +78,8 @@ def rank_candidates(
         "matched_required",
         "missing_required",
         "matched_preferred",
+        "skill_weights",
+        "missing_sections",
     ]
 
     if not resumes_dict or not jd_text.strip():
@@ -121,6 +125,8 @@ def rank_candidates(
             "matched_required": kw_result.matched_required,
             "missing_required": kw_result.missing_required,
             "matched_preferred": kw_result.matched_preferred,
+            "skill_weights": resume_skills,
+            "missing_sections": comp_result.missing_sections,
         })
 
     df = pd.DataFrame(records, columns=column_names)

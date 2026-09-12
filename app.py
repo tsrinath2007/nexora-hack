@@ -187,6 +187,46 @@ st.markdown(
     hr {
         border-color: #2e3e56 !important;
     }
+
+    /* Explanation Card & Structured Points */
+    .explanation-box {
+        background-color: #1a2332;
+        border: 1px solid #2e3e56;
+        border-radius: 10px;
+        padding: 1.15rem 1.35rem;
+        margin-top: 0.5rem;
+        margin-bottom: 1.25rem;
+        font-size: 0.93rem;
+        line-height: 1.65;
+        color: #e2e8f0;
+    }
+    .explanation-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.75rem;
+        margin-bottom: 0.85rem;
+    }
+    .explanation-item:last-child {
+        margin-bottom: 0;
+    }
+    .explanation-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 24px;
+        height: 24px;
+        background-color: rgba(45, 212, 167, 0.15);
+        color: #2dd4a7;
+        font-weight: 700;
+        font-size: 0.82rem;
+        border-radius: 6px;
+        border: 1px solid rgba(45, 212, 167, 0.35);
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+    .explanation-text {
+        flex: 1;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -479,7 +519,18 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         email = row.get("email")
 
         with st.expander(f"🏆 Rank #{idx + 1}: {candidate_name} (Score: {final_score:.2f})", expanded=(idx == 0)):
-            st.markdown(f"**Explanation:** {explanation}")
+            st.markdown("##### 📋 Detailed Candidate Evaluation")
+            if hasattr(explanation, "sentences") and explanation.sentences:
+                items_html = "".join(
+                    f'<div class="explanation-item">'
+                    f'<span class="explanation-badge">{i}</span>'
+                    f'<span class="explanation-text">{s}</span>'
+                    f'</div>'
+                    for i, s in enumerate(explanation.sentences, 1)
+                )
+                st.markdown(f'<div class="explanation-box">{items_html}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f"{explanation}")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             with col_m1:
                 st.metric("Final Score", f"{final_score:.2%}")
