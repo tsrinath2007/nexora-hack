@@ -2,23 +2,24 @@
 Keyword-based matching module for Resume Ranker.
 
 Features:
-- Predefined tech-skill taxonomy (~160+ canonical skills) and comprehensive alias mapping.
-- Exact alias-normalized regex matching with special character support (c++, c#, .net, etc.).
-- RapidFuzz fuzzy matching for typo tolerance (threshold ~85).
+- Predefined tech-skill taxonomy (~175+ canonical skills) and comprehensive alias mapping.
+- Exact alias-normalized regex matching with word-boundary safety (e.g. 'c' never matches inside 'c++', 'c#', 'c--').
+- Structured "Skill    Level" table parsing (Advanced=1.0, Intermediate=0.7, Beginner=0.4, None=-1.0).
+- Fallback freeform matching with negation window detection ('no experience', 'not familiar', 'none', 'n/a').
+- Support for multi-word skills like 'unreal engine', 'data structures & algorithms', 'object-oriented programming'.
 - JD extraction separating required vs preferred skills based on section/cue proximity.
-- Resume skill extraction with canonical normalization.
-- Keyword scoring with 0.7 required / 0.3 preferred weighting.
+- Keyword scoring summing proficiency weights, normalizing to 0-1.
 """
 
 from __future__ import annotations
 import re
 from pathlib import Path
-from typing import Set, Dict, List, Tuple, Any
+from typing import Set, Dict, List, Tuple, Any, Optional, Union
 from rapidfuzz import fuzz, process
 
 
 # ==============================================================================
-# 1. Tech-Skill Taxonomy (~160+ Canonical Skills) & Aliases
+# 1. Tech-Skill Taxonomy (~175+ Canonical Skills) & Aliases
 # ==============================================================================
 
 TECH_SKILLS: Set[str] = {
@@ -33,6 +34,16 @@ TECH_SKILLS: Set[str] = {
     "tailwind css", "bootstrap", "redux", "mobx", "graphql", "rest api", "webpack",
     "vite", "node.js", "express.js", "django", "flask", "fastapi", "spring boot",
     "asp.net", "ruby on rails", "laravel", "nestjs", "flutter", "electron", "jquery",
+
+    # Game Development & Real-time Systems
+    "unity", "unreal engine", "3d game development", "game physics", "ai programming",
+    "multiplayer/network programming", "shader programming", "game development",
+
+    # Core Computer Science & Architecture
+    "data structures & algorithms", "object-oriented programming",
+    "microservices", "unit testing", "pytest", "selenium", "cypress", "junit",
+    "agile", "scrum", "jira", "api design", "distributed systems", "websocket",
+    "grpc", "message queues", "system design",
 
     # Databases, Caching & Data Stores
     "postgresql", "mysql", "mongodb", "redis", "sqlite", "cassandra", "elasticsearch",
@@ -53,12 +64,7 @@ TECH_SKILLS: Set[str] = {
     "apache spark", "hadoop", "dbt", "apache airflow", "databricks", "tableau",
     "power bi", "mlops", "mlflow", "wandb", "deep learning", "machine learning",
     "computer vision", "natural language processing", "large language models",
-    "generative ai", "vector search", "reinforcement learning",
-
-    # Software Engineering, Architecture & Testing
-    "microservices", "unit testing", "pytest", "selenium", "cypress", "junit",
-    "agile", "scrum", "jira", "api design", "distributed systems", "websocket",
-    "grpc", "message queues", "system design"
+    "generative ai", "vector search", "reinforcement learning"
 }
 
 # Alias dictionary mapping abbreviations, common spellings, and variations to canonical skill
@@ -113,6 +119,50 @@ SKILL_ALIASES: Dict[str, str] = {
     ".net": "asp.net",
     "dotnet": "asp.net",
 
+    # Game Development & Multi-word Skills
+    "unity": "unity",
+    "unity3d": "unity",
+    "unity 3d": "unity",
+    "unity engine": "unity",
+    "unreal": "unreal engine",
+    "unreal engine": "unreal engine",
+    "unreal engine 4": "unreal engine",
+    "unreal engine 5": "unreal engine",
+    "ue4": "unreal engine",
+    "ue5": "unreal engine",
+    "data structures & algorithms": "data structures & algorithms",
+    "data structures and algorithms": "data structures & algorithms",
+    "data structures & algorithm": "data structures & algorithms",
+    "data structures and algorithm": "data structures & algorithms",
+    "data structures": "data structures & algorithms",
+    "algorithm design": "data structures & algorithms",
+    "dsa": "data structures & algorithms",
+    "object-oriented programming": "object-oriented programming",
+    "object oriented programming": "object-oriented programming",
+    "object-oriented software design": "object-oriented programming",
+    "object oriented software design": "object-oriented programming",
+    "object-oriented design": "object-oriented programming",
+    "oop": "object-oriented programming",
+    "oops": "object-oriented programming",
+    "3d game development": "3d game development",
+    "interactive 3d development": "3d game development",
+    "game development": "3d game development",
+    "game engine development": "3d game development",
+    "game physics": "game physics",
+    "interactive physics": "game physics",
+    "interactive physics & collision systems": "game physics",
+    "interactive physics and collision systems": "game physics",
+    "ai programming": "ai programming",
+    "game ai": "ai programming",
+    "multiplayer/network programming": "multiplayer/network programming",
+    "multiplayer networking": "multiplayer/network programming",
+    "networked multiplayer systems": "multiplayer/network programming",
+    "network programming": "multiplayer/network programming",
+    "multiplayer programming": "multiplayer/network programming",
+    "shader programming": "shader programming",
+    "shaders": "shader programming",
+    "shader": "shader programming",
+
     # Cloud & DevOps
     "k8s": "kubernetes",
     "kube": "kubernetes",
@@ -128,6 +178,8 @@ SKILL_ALIASES: Dict[str, str] = {
     "gitlab": "gitlab ci",
     "docker compose": "docker",
     "docker-compose": "docker",
+    "version control / collaborative development": "git",
+    "version control": "git",
     "cicd": "ci/cd",
     "ci cd": "ci/cd",
     "ci-cd": "ci/cd",
@@ -175,16 +227,24 @@ SORTED_ALIASES: List[Tuple[str, str]] = sorted(
     SKILL_ALIASES.items(), key=lambda item: len(item[0]), reverse=True
 )
 
+def _make_boundary_pattern(term: str) -> re.Pattern:
+    """
+    Creates a strict boundary-safe regex pattern.
+    Disallows preceding or following word characters or special tech characters +, #, -.
+    Ensures 'c' never matches inside 'c++', 'c#', 'c--', etc.
+    """
+    escaped = re.escape(term)
+    prefix = r"(?<![a-zA-Z0-9_+#\-])"
+    suffix = r"(?![a-zA-Z0-9_+#\-])"
+    return re.compile(rf"{prefix}{escaped}{suffix}", re.IGNORECASE)
+
 # Precompile regex boundary patterns for all aliases
-_ALIAS_PATTERNS: List[Tuple[re.Pattern, str]] = []
-for alias_key, canonical_skill in SORTED_ALIASES:
-    escaped = re.escape(alias_key)
-    # Match boundary that respects symbols like +, #, ., /
-    pattern = re.compile(rf"(?<![a-zA-Z0-9_]){escaped}(?![a-zA-Z0-9_])", re.IGNORECASE)
-    _ALIAS_PATTERNS.append((pattern, canonical_skill))
+_ALIAS_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    (_make_boundary_pattern(alias_key), canonical_skill)
+    for alias_key, canonical_skill in SORTED_ALIASES
+]
 
 # Targets for fuzzy matching: only multi-character canonical skills (>= 4 chars)
-# to avoid false positive matches on short acronyms like 'c', 'r', 'go', 'js', 'aws'.
 _FUZZY_TARGETS: List[str] = [skill for skill in TECH_SKILLS if len(skill) >= 4]
 
 # Stopwords to ignore during candidate token extraction
@@ -197,7 +257,32 @@ _STOP_WORDS: Set[str] = {
     "experience", "experienced", "skills", "tools", "looking", "candidate", "responsibilities",
     "requirements", "qualifications", "education", "phone", "email", "proficient", "proficiency",
     "familiarity", "knowledge", "design", "develop", "developing", "implement", "implementing",
-    "scale", "scalable", "applications", "frameworks", "pipelines", "models", "automated"
+    "scale", "scalable", "applications", "frameworks", "pipelines", "models", "automated",
+    "programming", "software", "development", "developer", "computer", "systems", "system"
+}
+
+# Negation detection patterns for window check (~5 words around match)
+_PRE_NEGATION_RE = re.compile(
+    r"\b(no\s+(?:prior\s+)?experience(?:\s+(?:in|with|of))?|not\s+familiar(?:\s+with)?|no\s+knowledge(?:\s+of)?|not\s+proficient(?:\s+in)?|zero\s+experience(?:\s+in)?)\b",
+    re.IGNORECASE,
+)
+
+_POST_NEGATION_RE = re.compile(
+    r"^[\s:,\-–—\(\)]*\b(none|n/a|na|no\s+experience)\b",
+    re.IGNORECASE,
+)
+
+# Table row detection pattern: ^(.+?)\s+(Advanced|Intermediate|Beginner|None)$
+_TABLE_ROW_RE = re.compile(
+    r"^\s*(.+?)\s+(Advanced|Intermediate|Beginner|None)\s*$",
+    re.IGNORECASE
+)
+
+LEVEL_WEIGHTS: Dict[str, float] = {
+    "advanced": 1.0,
+    "intermediate": 0.7,
+    "beginner": 0.4,
+    "none": -1.0,
 }
 
 
@@ -285,57 +370,113 @@ class KeywordScoreResult(dict):
 
 
 # ==============================================================================
-# 2. Skill Extraction Core Logic
+# 2. Skill Normalization & Extraction Helpers
 # ==============================================================================
+
+def normalize_skill_name(raw_skill: str) -> Optional[str]:
+    """
+    Normalizes a skill string against the taxonomy using exact alias lookup,
+    word-boundary-safe regex matching, or fuzzy matching.
+    Guarantees 'C' will NOT match inside 'C++', 'C#', or 'C--'.
+    """
+    cleaned = raw_skill.strip().lower()
+    if not cleaned:
+        return None
+
+    # 1. Exact alias / taxonomy lookup
+    if cleaned in SKILL_ALIASES:
+        return SKILL_ALIASES[cleaned]
+
+    # 2. Boundary-safe regex matching (longer aliases evaluated first)
+    for pattern, canonical_skill in _ALIAS_PATTERNS:
+        if pattern.search(raw_skill):
+            return canonical_skill
+
+    # 3. Fuzzy matching for multi-character skills (len >= 4)
+    if len(cleaned) >= 4:
+        match = process.extractOne(cleaned, _FUZZY_TARGETS, scorer=fuzz.ratio, score_cutoff=85)
+        if match:
+            return match[0]
+
+    return None
+
+
+def _is_negated_in_window(text: str, start: int, end: int, window_words: int = 5) -> bool:
+    """
+    Checks whether negation words appear within ~5 words before or after the match,
+    respecting sentence/clause boundaries (. ; \n) and directional context:
+    - Preceding negation: phrases like 'no experience in', 'not familiar with' before the skill.
+    - Following negation: terms like 'none', 'n/a', 'no experience' immediately following the skill.
+    """
+    # Pre-window: up to window_words before match within the same sentence/clause
+    pre_text = text[:start]
+    last_boundary = max(pre_text.rfind("."), pre_text.rfind("\n"), pre_text.rfind(";"))
+    pre_clause = pre_text[last_boundary + 1:] if last_boundary != -1 else pre_text
+    pre_tokens = pre_clause.split()[-window_words:]
+    if pre_tokens and _PRE_NEGATION_RE.search(" ".join(pre_tokens)):
+        return True
+
+    # Post-window: up to window_words after match within the same sentence/clause
+    post_text = text[end:]
+    first_boundary = len(post_text)
+    for sep in [".", "\n", ";"]:
+        pos = post_text.find(sep)
+        if pos != -1 and pos < first_boundary:
+            first_boundary = pos
+    post_clause = post_text[:first_boundary]
+    post_tokens = post_clause.split()[:window_words]
+    if post_tokens and _POST_NEGATION_RE.search(" ".join(post_tokens)):
+        return True
+
+    return False
+
 
 def extract_keywords_from_text(text: str, fuzzy_threshold: float = 85.0) -> Set[str]:
     """
-    Extracts canonical skills from text using:
-    1. Case-insensitive alias-normalized matching (exact regex).
-    2. RapidFuzz fuzzy matching (score >= fuzzy_threshold) for candidate tokens/phrases.
-
-    Args:
-        text: Raw text to extract skills from.
-        fuzzy_threshold: Minimum RapidFuzz match ratio (0-100), default 85.0.
-
-    Returns:
-        A set of canonical skill names found in the text.
+    Extracts canonical skills from text using boundary-safe regex matching
+    and fuzzy matching with negation filtering.
     """
     if not text:
         return set()
 
     found_skills: Set[str] = set()
 
-    # Step 1: Exact alias-normalized regex matching
+    # Step 1: Word-boundary-safe exact regex matching
     for pattern, canonical_skill in _ALIAS_PATTERNS:
-        if pattern.search(text):
-            found_skills.add(canonical_skill)
+        for m in pattern.finditer(text):
+            if not _is_negated_in_window(text, m.start(), m.end()):
+                found_skills.add(canonical_skill)
 
-    # Step 2: RapidFuzz fuzzy matching for typos/variants
-    # Extract candidate 1-gram, 2-gram, and 3-gram tokens from text
-    cleaned = re.sub(r"[^\w\s\-\.]", " ", text)
-    raw_tokens = cleaned.split()
+    # Step 2: RapidFuzz fuzzy matching for typos/variants within clauses
+    # Split text by punctuation delimiters so n-grams do not cross phrase boundaries
+    candidate_phrases: Set[Tuple[str, int, int]] = set()
 
-    candidate_phrases: Set[str] = set()
+    for clause_match in re.finditer(r"[^,;\n\.\:\(\)\[\]]+", text):
+        clause = clause_match.group().strip()
+        clause_start = clause_match.start()
+        clause_end = clause_match.end()
 
-    for idx, tok in enumerate(raw_tokens):
-        cleaned_tok = tok.strip(".-_").lower()
-        if len(cleaned_tok) >= 4 and cleaned_tok not in _STOP_WORDS:
-            candidate_phrases.add(cleaned_tok)
+        if not clause:
+            continue
 
-        # 2-grams
-        if idx + 1 < len(raw_tokens):
-            w2 = f"{raw_tokens[idx]} {raw_tokens[idx+1]}".strip(".-_").lower()
-            if len(w2) >= 4:
-                candidate_phrases.add(w2)
+        tokens = clause.split()
+        for n in (1, 2, 3):
+            for i in range(len(tokens) - n + 1):
+                ngram = " ".join(tokens[i:i+n]).strip(".-_")
+                cleaned_ngram = ngram.lower()
+                if len(cleaned_ngram) < 4 or cleaned_ngram in _STOP_WORDS:
+                    continue
 
-        # 3-grams
-        if idx + 2 < len(raw_tokens):
-            w3 = f"{raw_tokens[idx]} {raw_tokens[idx+1]} {raw_tokens[idx+2]}".strip(".-_").lower()
-            if len(w3) >= 5:
-                candidate_phrases.add(w3)
+                # Find exact position within clause
+                ngram_match = re.search(r"\b" + re.escape(ngram) + r"\b", text[clause_start:clause_end], re.IGNORECASE)
+                if ngram_match:
+                    start_pos = clause_start + ngram_match.start()
+                    end_pos = clause_start + ngram_match.end()
+                    candidate_phrases.add((cleaned_ngram, start_pos, end_pos))
 
-    for candidate in candidate_phrases:
+    for candidate, start, end in candidate_phrases:
+        if _is_negated_in_window(text, start, end):
+            continue
         match = process.extractOne(
             candidate,
             _FUZZY_TARGETS,
@@ -343,8 +484,7 @@ def extract_keywords_from_text(text: str, fuzzy_threshold: float = 85.0) -> Set[
             score_cutoff=fuzzy_threshold,
         )
         if match:
-            matched_skill = match[0]
-            found_skills.add(matched_skill)
+            found_skills.add(match[0])
 
     return found_skills
 
@@ -369,17 +509,17 @@ _PREF_CUES_PATTERN = re.compile(
 
 _REQ_SECTION_HEADER = re.compile(
     r"^(requirements?|qualifications?|must\s+haves?|what\s+you(?:\'ll)?\s+need|"
-    r"minimum\s+requirements?|essential\s+skills?|what\s+we(?:\'re)?\s+looking\s+for)",
+    r"minimum\s+requirements?|essential\s+skills?|what\s+we(?:\'re)?\s+looking\s+for|required)$",
     re.IGNORECASE,
 )
 
 _PREF_SECTION_HEADER = re.compile(
-    r"^(preferred|nice\s+to\s+have|bonus|desired|desirable|optional|good\s+to\s+have)",
+    r"^(preferred|nice\s+to\s+have|bonus|desired|desirable|optional|good\s+to\s+have|preferred\s+qualifications?)$",
     re.IGNORECASE,
 )
 
 _OTHER_SECTION_HEADER = re.compile(
-    r"^(responsibilities|overview|about|duties|what\s+you(?:\'ll)?\s+do|summary)",
+    r"^(responsibilities|overview|about|duties|what\s+you(?:\'ll)?\s+do|summary|education|experience|suggested\s+test\s+order)",
     re.IGNORECASE,
 )
 
@@ -405,6 +545,7 @@ def extract_keywords_from_jd(jd_text: str, fuzzy_threshold: float = 85.0) -> JDK
 
     all_skills = extract_keywords_from_text(jd_text, fuzzy_threshold=fuzzy_threshold)
     required_skills: Set[str] = set()
+    preferred_skills: Set[str] = set()
 
     # Section-aware line parsing
     current_section = "OTHER"
@@ -433,97 +574,177 @@ def extract_keywords_from_jd(jd_text: str, fuzzy_threshold: float = 85.0) -> JDK
         if (has_req_cue or current_section == "REQUIRED") and not has_pref_cue:
             line_skills = extract_keywords_from_text(cleaned_line, fuzzy_threshold=fuzzy_threshold)
             required_skills.update(line_skills)
+        elif (has_pref_cue or current_section == "PREFERRED") and not has_req_cue:
+            line_skills = extract_keywords_from_text(cleaned_line, fuzzy_threshold=fuzzy_threshold)
+            preferred_skills.update(line_skills)
 
-    # Keyword proximity window check around required cues
-    for match in _REQ_CUES_PATTERN.finditer(jd_text):
-        start = max(0, match.start() - 30)
-        end = min(len(jd_text), match.end() + 200)
-        window = jd_text[start:end]
-        window_skills = extract_keywords_from_text(window, fuzzy_threshold=fuzzy_threshold)
-        required_skills.update(window_skills)
+    # Fallback to proximity window only if no section headers or cues identified required skills
+    if not required_skills:
+        for match in _REQ_CUES_PATTERN.finditer(jd_text):
+            start = max(0, match.start() - 30)
+            end = min(len(jd_text), match.end() + 200)
+            window = jd_text[start:end]
+            pref_match = _PREF_CUES_PATTERN.search(window)
+            if pref_match:
+                window = window[:pref_match.start()]
+            window_skills = extract_keywords_from_text(window, fuzzy_threshold=fuzzy_threshold)
+            required_skills.update(window_skills)
 
     # Only include skills actually present in all_skills
     required_skills = required_skills.intersection(all_skills)
 
-    # Preferred skills are other skill mentions
-    preferred_skills = all_skills - required_skills
+    # Determine preferred skills
+    if not preferred_skills:
+        preferred_skills = all_skills - required_skills
+    else:
+        preferred_skills = preferred_skills.intersection(all_skills) - required_skills
 
     return JDKeywordsResult(required_skills, preferred_skills)
 
 
 # ==============================================================================
-# 4. Resume Skill Extraction
+# 4. Resume Skill Extraction with Proficiency & Table Parsing
 # ==============================================================================
 
-def extract_keywords_from_resume(resume_text: str, fuzzy_threshold: float = 85.0) -> Set[str]:
-    """
-    Extracts canonical tech skills from a resume text using alias normalization
-    and rapidfuzz fuzzy matching.
+def extract_keywords_from_resume(
+    resume_text: str,
+    fuzzy_threshold: float = 85.0,
+) -> Dict[str, float]:
+    r"""
+    Extracts canonical tech skills and proficiency weights from candidate resume text:
+    1. First pass: regex-matches lines matching ^(.+?)\s+(Advanced|Intermediate|Beginner|None)$
+       Maps level to weights: Advanced=1.0, Intermediate=0.7, Beginner=0.4, None=-1.0.
+       Normalizes skills with boundary safety ('C' never matches inside 'C++' or 'C#').
+    2. Fallback: for freeform resumes or skills not covered in the table, extracts
+       mentions while checking a ~5-word window around each match for negation cues
+       ('no experience', 'not familiar', 'none', 'n/a') and discards matches if found.
 
     Args:
         resume_text: Raw extracted resume text.
         fuzzy_threshold: Threshold for fuzzy matching (default 85.0).
 
     Returns:
-        Set of canonical skill names found in the resume.
+        Dict[str, float] mapping canonical skill -> level weight.
     """
-    return extract_keywords_from_text(resume_text, fuzzy_threshold=fuzzy_threshold)
+    if not resume_text or not resume_text.strip():
+        return {}
+
+    skill_weights: Dict[str, float] = {}
+    table_matched = False
+
+    # Pass 1: Structured "Skill    Level" table matching
+    for line in resume_text.splitlines():
+        line_clean = line.strip()
+        match = _TABLE_ROW_RE.match(line_clean)
+        if match:
+            raw_skill_str = match.group(1).strip()
+            level_str = match.group(2).strip().lower()
+            weight = LEVEL_WEIGHTS.get(level_str, 0.0)
+
+            canonical = normalize_skill_name(raw_skill_str)
+            if canonical:
+                skill_weights[canonical] = weight
+                table_matched = True
+
+    # Pass 2: Fallback for freeform resumes (or skills mentioned in freeform text)
+    # If a skill was not in the table, extract with negation window check
+    for pattern, canonical in _ALIAS_PATTERNS:
+        # If skill already recorded from table, respect the table's explicit proficiency
+        if canonical in skill_weights:
+            continue
+
+        for m in pattern.finditer(resume_text):
+            if not _is_negated_in_window(resume_text, m.start(), m.end()):
+                # Un-negated freeform mention gets standard weight 1.0
+                skill_weights[canonical] = 1.0
+
+    return skill_weights
 
 
 # ==============================================================================
-# 5. Keyword Scoring (0.7 Required + 0.3 Preferred)
+# 5. Keyword Scoring with Proficiency Summing
 # ==============================================================================
 
 def keyword_score(
     jd_required: Set[str] | List[str],
     jd_preferred: Set[str] | List[str],
-    resume_skills: Set[str] | List[str],
+    resume_skill_weights: Union[Dict[str, float], Set[str], List[str]],
 ) -> KeywordScoreResult:
     """
-    Computes a keyword match score between 0.0 and 1.0.
-
-    Weights:
-        - Required skills match: 0.7
-        - Preferred skills match: 0.3
+    Computes a keyword match score between 0.0 and 1.0 taking skill proficiency into account:
+    - Sums level weights for required skills present in jd_required:
+      Advanced (+1.0), Intermediate (+0.7), Beginner (+0.4), None (-1.0), Unmentioned (0.0).
+    - Normalizes sum to 0-1.
+    - Classifies:
+      - matched_required: required skills with weight > 0
+      - missing_required: required skills with weight <= 0 (unmentioned or explicitly None)
+      - matched_preferred: preferred skills with weight > 0
 
     Args:
         jd_required: Required skills from Job Description.
         jd_preferred: Preferred skills from Job Description.
-        resume_skills: Skills extracted from the candidate's resume.
+        resume_skill_weights: Dict mapping skill -> weight, or set/list of skills.
 
     Returns:
-        KeywordScoreResult object containing:
-            - score (float between 0.0 and 1.0)
-            - matched_required (List[str])
-            - missing_required (List[str])
-            - matched_preferred (List[str])
+        KeywordScoreResult with score, matched_required, missing_required, matched_preferred.
     """
+    if not isinstance(resume_skill_weights, dict):
+        weights_dict: Dict[str, float] = {s: 1.0 for s in resume_skill_weights}
+    else:
+        weights_dict = resume_skill_weights
+
     req_set = set(jd_required)
     pref_set = set(jd_preferred)
-    res_set = set(resume_skills)
 
-    matched_required = sorted(list(req_set & res_set))
-    missing_required = sorted(list(req_set - res_set))
-    matched_preferred = sorted(list(pref_set & res_set))
+    matched_required: List[str] = []
+    missing_required: List[str] = []
+    req_weight_sum = 0.0
 
-    req_total = len(req_set)
-    pref_total = len(pref_set)
+    for skill in sorted(req_set):
+        weight = weights_dict.get(skill, 0.0)
+        req_weight_sum += weight
+        if weight > 0:
+            matched_required.append(skill)
+        else:
+            missing_required.append(skill)
 
-    if req_total > 0 and pref_total > 0:
-        req_score = len(matched_required) / req_total
-        pref_score = len(matched_preferred) / pref_total
-        score = 0.7 * req_score + 0.3 * pref_score
-    elif req_total > 0 and pref_total == 0:
-        score = len(matched_required) / req_total
-    elif req_total == 0 and pref_total > 0:
-        score = len(matched_preferred) / pref_total
+    matched_preferred: List[str] = []
+    pref_weight_sum = 0.0
+
+    for skill in sorted(pref_set):
+        weight = weights_dict.get(skill, 0.0)
+        if weight > 0:
+            pref_weight_sum += weight
+            matched_preferred.append(skill)
+
+    # Normalize required score: max possible sum is len(req_set) * 1.0
+    num_req = len(req_set)
+    num_pref = len(pref_set)
+
+    if num_req > 0:
+        req_score = max(0.0, min(1.0, req_weight_sum / num_req))
     else:
-        score = 0.0
+        req_score = 0.0
 
-    score = max(0.0, min(1.0, float(score)))
+    if num_pref > 0:
+        pref_score = max(0.0, min(1.0, pref_weight_sum / num_pref))
+    else:
+        pref_score = 0.0
+
+    # Weighted combination: 0.7 required + 0.3 preferred
+    if num_req > 0 and num_pref > 0:
+        final_score = 0.7 * req_score + 0.3 * pref_score
+    elif num_req > 0:
+        final_score = req_score
+    elif num_pref > 0:
+        final_score = pref_score
+    else:
+        final_score = 0.0
+
+    final_score = round(max(0.0, min(1.0, final_score)), 4)
 
     return KeywordScoreResult(
-        score=round(score, 4),
+        score=final_score,
         matched_required=matched_required,
         missing_required=missing_required,
         matched_preferred=matched_preferred,
@@ -535,19 +756,25 @@ def keyword_score(
 # ==============================================================================
 
 def main():
-    """Runs a verification test comparing sample JD against sample resumes."""
-    from parser import extract_jd, extract_resumes
+    """Runs verification test evaluating the 6 Game Developer test resumes."""
+    from parser import extract_text_from_pdf
 
     base_dir = Path(__file__).resolve().parent
-    jd_path = base_dir / "sample_data" / "job_description.txt"
-    resumes_dir = base_dir / "sample_data" / "resumes"
+    jd_path = base_dir / "test_data" / "Software_Game_Developer_Job_Description.pdf"
+    resumes_dir = base_dir / "test_data" / "resumes"
 
-    print("=" * 70)
-    print("KEYWORD MATCH MODULE - VERIFICATION TEST")
-    print("=" * 70)
+    # Fallback to Downloads if not in test_data
+    if not jd_path.exists():
+        jd_path = Path(r"C:\Users\SES\Downloads\Software_Game_Developer_Job_Description.pdf")
+    if not resumes_dir.exists():
+        resumes_dir = Path(r"C:\Users\SES\Downloads")
+
+    print("=" * 80)
+    print("KEYWORD MATCH MODULE - PROFICIENCY & NEGATION VERIFICATION TEST")
+    print("=" * 80)
 
     # 1. Parse JD
-    jd_text = extract_jd(jd_path)
+    jd_text = extract_text_from_pdf(jd_path)
     jd_required, jd_preferred = extract_keywords_from_jd(jd_text)
 
     print("\n[JOB DESCRIPTION]")
@@ -555,30 +782,77 @@ def main():
     print(f"Total Required Skills ({len(jd_required)}): {sorted(jd_required)}")
     print(f"Total Preferred Skills ({len(jd_preferred)}): {sorted(jd_preferred)}")
 
-    # 2. Parse Resumes
-    resumes = extract_resumes(resumes_dir)
-    print(f"\nFound {len(resumes)} resume(s) in {resumes_dir.name}/")
+    # 2. Test specific multi-word skills detection
+    print("\n[MULTI-WORD SKILLS DETECTION TEST]")
+    test_text = (
+        "Experienced in Unreal Engine, Data Structures and Algorithms, "
+        "Data Structures & Algorithms, Object-Oriented Programming, and OOP."
+    )
+    detected = extract_keywords_from_text(test_text)
+    print("Test text:", test_text)
+    print("Detected skills:", sorted(detected))
+    assert "unreal engine" in detected, "Failed to detect 'unreal engine'"
+    assert "data structures & algorithms" in detected, "Failed to detect 'data structures & algorithms'"
+    assert "object-oriented programming" in detected, "Failed to detect 'object-oriented programming'"
+    print("[PASS] Multi-word skills and aliases correctly detected!")
 
-    # 3. Score Each Resume
-    print("\n" + "=" * 70)
-    print("RESUME MATCHING RESULTS")
-    print("=" * 70)
+    # 3. Test C vs C++ boundary safety
+    c_boundary_text = "I know C++ and C#."
+    detected_c = extract_keywords_from_text(c_boundary_text)
+    print("\n[C vs C++ BOUNDARY TEST]")
+    print("Test text:", c_boundary_text)
+    print("Detected skills:", sorted(detected_c))
+    assert "c++" in detected_c and "c#" in detected_c, "C++ or C# missing"
+    assert "c" not in detected_c, "'C' incorrectly matched inside C++ or C#!"
+    print("[PASS] 'C' does not match inside 'C++' or 'C#'!")
 
-    for filename, resume_text in resumes.items():
-        resume_skills = extract_keywords_from_resume(resume_text)
-        result = keyword_score(jd_required, jd_preferred, resume_skills)
+    # 3b. Test freeform negation detection
+    neg_test_text = "Skills: Python, Git. No experience in C++, not familiar with Unreal Engine, and Unity: none."
+    detected_neg = extract_keywords_from_text(neg_test_text)
+    print("\n[FREEFORM NEGATION TEST]")
+    print("Test text:", neg_test_text)
+    print("Detected skills:", sorted(detected_neg))
+    assert "python" in detected_neg and "git" in detected_neg, "Positive skills missing"
+    assert "c++" not in detected_neg, "'C++' should be discarded due to 'No experience in'"
+    assert "unreal engine" not in detected_neg, "'Unreal Engine' should be discarded due to 'not familiar with'"
+    assert "unity" not in detected_neg, "'Unity' should be discarded due to 'none'"
+    print("[PASS] Freeform negation words ('no experience', 'not familiar', 'none') correctly filter out skills!")
 
-        print(f"\nCandidate Resume: {filename}")
-        print("-" * 50)
-        print(f"Extracted Resume Skills: {sorted(resume_skills)}")
-        print(f"Keyword Match Score:     {result.score:.2%} ({result.score:.4f})")
-        print(f"Matched Required ({len(result.matched_required)}/{len(jd_required)}): {result.matched_required}")
-        print(f"Missing Required ({len(result.missing_required)}/{len(jd_required)}): {result.missing_required}")
-        print(f"Matched Preferred ({len(result.matched_preferred)}/{len(jd_preferred)}): {result.matched_preferred}")
+    # 4. Evaluate all 6 test resumes
+    print("\n" + "=" * 80)
+    print("6 TEST RESUMES KEYWORD SCORING RESULTS")
+    print("=" * 80)
 
-    print("\n" + "=" * 70)
-    print("Verification test completed successfully!")
-    print("=" * 70)
+    resume_files = sorted(resumes_dir.glob("CAND_*.pdf"))
+    if not resume_files:
+        print("No CAND_*.pdf resumes found in", resumes_dir)
+        return
+
+    for rf in resume_files:
+        resume_text = extract_text_from_pdf(rf)
+        weights = extract_keywords_from_resume(resume_text)
+        res = keyword_score(jd_required, jd_preferred, weights)
+
+        cand_id = rf.name.split("_")[0] + "_" + rf.name.split("_")[1]
+        print(f"\nCandidate: {cand_id} ({rf.name})")
+        print("-" * 60)
+        print(f"Keyword Score:     {res.score:.2%} ({res.score:.4f})")
+        print(f"Matched Required ({len(res.matched_required)}/{len(jd_required)}): {res.matched_required}")
+        print(f"Missing Required ({len(res.missing_required)}/{len(jd_required)}): {res.missing_required}")
+        print(f"Matched Preferred ({len(res.matched_preferred)}/{len(jd_preferred)}): {res.matched_preferred}")
+
+        if "CAND_005" in rf.name:
+            print("\n>>> CONFIRMING CAND_005 BEHAVIOR <<<")
+            print(f"    CAND_005 matched_required: {res.matched_required}")
+            print(f"    CAND_005 missing_required count: {len(res.missing_required)} / {len(jd_required)}")
+            assert res.matched_required == [], f"Expected [] but got {res.matched_required}"
+            assert len(res.missing_required) == 8, f"Expected 8 missing, got {len(res.missing_required)}"
+            assert len(jd_required) == 8, f"Expected 8 required skills in JD, got {len(jd_required)}"
+            print("    [PASS] CAND_005 shows matched_required: [] and missing_required: all 8 required skills!")
+
+    print("\n" + "=" * 80)
+    print("All 6 resumes evaluated and verified successfully!")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
