@@ -638,6 +638,14 @@ def extract_keywords_from_resume(
     if not resume_text or not resume_text.strip():
         return {}
 
+    # Debug print: CAND_005 raw extracted text before keyword matching
+    if "CAND_005" in resume_text:
+        print("\n" + "=" * 70)
+        print("[DEBUG] Raw extracted text for CAND_005 right before keyword matching:")
+        print("=" * 70)
+        print(resume_text)
+        print("=" * 70 + "\n")
+
     skill_weights: Dict[str, float] = {}
     table_matched = False
 
