@@ -1,10 +1,19 @@
 import io
+import sys
+import importlib
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+import ranker
+try:
+    importlib.reload(ranker)
+except Exception:
+    pass
+
 from parser import extract_jd, extract_text_from_pdf, extract_resumes
-from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT, COMPLETENESS_WEIGHT
+from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
+COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
 from explain import generate_top3_explanations
 from resume_quality import check_resume_completeness
 
