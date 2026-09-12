@@ -19,6 +19,7 @@ from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
 from explain import generate_top3_explanations, recommend_best_fit
 from resume_quality import check_resume_completeness, extract_email
+from jd_bias_check import flag_jd_bias
 
 # Page configuration
 st.set_page_config(
@@ -373,6 +374,31 @@ with st.expander("💡 Or test with pre-loaded demo files"):
     use_sample = st.checkbox("Load demo Job Description and 3 sample resumes", value=False)
     if use_sample:
         st.info("Using sample ML Engineer JD and 3 sample resumes (Alice, Bob, Carol).")
+
+# ==============================================================================
+# JD Bias & Inclusivity Audit
+# ==============================================================================
+preview_jd_text = ""
+if jd_file:
+    try:
+        preview_jd_text = extract_jd(jd_file)
+    except Exception:
+        pass
+elif use_sample:
+    sample_jd_path = Path(__file__).resolve().parent / "sample_data" / "job_description.txt"
+    if sample_jd_path.exists():
+        preview_jd_text = sample_jd_path.read_text(encoding="utf-8")
+
+if jd_file or use_sample:
+    bias_flags = flag_jd_bias(preview_jd_text) if preview_jd_text else []
+    with st.expander("⚠️ JD Bias Check", expanded=(len(bias_flags) > 0)):
+        st.markdown("Automated scan for overly narrow tool requirements, seniority-experience mismatches, exclusionary/age-coded phrasing, gendered terms, and degree gatekeeping:")
+        if bias_flags:
+            st.warning(f"Detected **{len(bias_flags)}** potential narrow-phrasing or bias concern(s):")
+            for flag in bias_flags:
+                st.markdown(f"- {flag}")
+        else:
+            st.success("✅ **No major bias concerns detected** in this Job Description.")
 
 st.divider()
 
