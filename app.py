@@ -21,19 +21,201 @@ from resume_quality import check_resume_completeness, extract_email
 
 # Page configuration
 st.set_page_config(
-    page_title="Resume Ranker",
-    page_icon="📄",
+    page_title="Smart Shortlisting Engine",
+    page_icon="🌳",
     layout="wide",
 )
 
-st.title("📄 AI Resume Ranker")
+# Custom Brand Theme CSS (Dark Navy #1a2332, Card Navy #232f42, Teal Accent #2dd4a7)
+st.markdown(
+    """
+    <style>
+    /* Global Container Adjustments */
+    .stApp {
+        background-color: #1a2332;
+        color: #e8ecf1;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    /* Headings */
+    h1, h2, h3, h4, h5, h6 {
+        color: #ffffff !important;
+        letter-spacing: -0.015em;
+    }
+
+    /* Header Section */
+    .app-header {
+        padding-top: 0.5rem;
+        margin-bottom: 1.25rem;
+    }
+    .main-title {
+        font-size: 2.35rem;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 0.35rem;
+    }
+    .main-title .teal-accent {
+        color: #2dd4a7;
+    }
+    .main-subtitle {
+        font-size: 1.12rem;
+        color: #94a3b8;
+        margin-bottom: 0.5rem;
+    }
+    .hackathon-caption {
+        font-size: 0.88rem;
+        color: #64748b;
+        margin-bottom: 0.15rem;
+    }
+    .team-caption {
+        font-size: 0.78rem;
+        color: #475569;
+        margin-bottom: 1.25rem;
+    }
+
+    /* Info Badge / System Pill */
+    .system-pill {
+        background-color: #232f42;
+        border: 1px solid #2e3e56;
+        border-radius: 12px;
+        padding: 0.85rem 1.25rem;
+        margin-bottom: 1.75rem;
+        font-size: 0.92rem;
+        color: #cbd5e1;
+    }
+
+    /* File Uploader Cards */
+    [data-testid="stFileUploader"] {
+        background-color: #232f42;
+        border: 1px solid #2e3e56;
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #1a2332 !important;
+        border: 1.5px dashed #2dd4a7 !important;
+        border-radius: 10px !important;
+    }
+    [data-testid="stFileUploaderDropzoneInstructions"] {
+        color: #94a3b8 !important;
+    }
+
+    /* Primary Buttons (Run Ranking) */
+    .stButton > button[kind="primary"], div.stButton > button:first-child {
+        background: linear-gradient(135deg, #2dd4a7, #1eb88e) !important;
+        color: #0b201a !important;
+        font-weight: 700 !important;
+        border-radius: 12px !important;
+        border: none !important;
+        padding: 0.65rem 1.5rem !important;
+        box-shadow: 0 4px 16px rgba(45, 212, 167, 0.25) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    .stButton > button[kind="primary"]:hover, div.stButton > button:first-child:hover {
+        background: linear-gradient(135deg, #37e4b7, #24c69b) !important;
+        color: #051410 !important;
+        box-shadow: 0 6px 22px rgba(45, 212, 167, 0.38) !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Action Links (Send Mail) */
+    .send-mail-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 6px 14px;
+        background: #2dd4a7;
+        color: #0b201a !important;
+        text-decoration: none !important;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 13.5px;
+        box-shadow: 0 2px 8px rgba(45, 212, 167, 0.2);
+        transition: all 0.15s ease;
+    }
+    .send-mail-link:hover {
+        background: #39e6b8;
+        color: #051410 !important;
+        box-shadow: 0 4px 14px rgba(45, 212, 167, 0.35);
+        transform: translateY(-1px);
+    }
+    .no-email-badge {
+        display: inline-block;
+        color: #64748b;
+        font-size: 13px;
+        font-style: italic;
+    }
+
+    /* Expanders & Cards */
+    div[data-testid="stExpander"] {
+        background-color: #232f42 !important;
+        border: 1px solid #2e3e56 !important;
+        border-radius: 12px !important;
+        margin-bottom: 0.85rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    }
+    div[data-testid="stExpander"] details summary {
+        font-weight: 600 !important;
+        color: #e8ecf1 !important;
+    }
+
+    /* Metric Cards */
+    [data-testid="stMetric"] {
+        background-color: #1a2332;
+        border: 1px solid #2e3e56;
+        border-radius: 10px;
+        padding: 0.85rem 1rem;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #94a3b8 !important;
+        font-size: 0.82rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #2dd4a7 !important;
+        font-weight: 700 !important;
+    }
+
+    /* Dataframe container */
+    [data-testid="stDataFrame"] {
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid #2e3e56;
+    }
+
+    /* Horizontal Divider */
+    hr {
+        border-color: #2e3e56 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Header Section
+st.markdown(
+    """
+    <div class="app-header">
+        <div class="main-title">🌳 <span class="teal-accent">Smart Shortlisting Engine</span></div>
+        <div class="main-subtitle">Upload a Job Description and Candidate Resumes to find the perfect fit.</div>
+        <div class="hackathon-caption">Built for the Nexora Hackathon @ Manipal Institute of Technology, Bengaluru</div>
+        <div class="team-caption">Team: i dont know</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(
     f"""
-    Rank and evaluate candidate resumes against a Job Description using hybrid
-    **Semantic Embeddings ({SEMANTIC_WEIGHT * 100:.0f}%)**, **Keyword Matching ({KEYWORD_WEIGHT * 100:.0f}%)**,
-    and **Resume Completeness ({COMPLETENESS_WEIGHT * 100:.0f}%)**.
-    Supports **PDF**, **DOCX**, **TXT**, and **XML** formats.
-    """
+    <div class="system-pill">
+        ⚡ <strong>Hybrid Multi-Criteria Evaluation</strong>: 
+        <strong style="color: #2dd4a7;">Semantic Embeddings ({SEMANTIC_WEIGHT * 100:.0f}%)</strong> + 
+        <strong style="color: #2dd4a7;">Keyword Matching ({KEYWORD_WEIGHT * 100:.0f}%)</strong> + 
+        <strong style="color: #2dd4a7;">Resume Completeness ({COMPLETENESS_WEIGHT * 100:.0f}%)</strong>. 
+        Supports <strong>PDF</strong>, <strong>DOCX</strong>, <strong>TXT</strong>, and <strong>XML</strong> formats with automated candidate deduplication.
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 def get_jd_title(jd_name: str, jd_text: str) -> str:
@@ -52,8 +234,6 @@ def get_jd_title(jd_name: str, jd_text: str) -> str:
     return "Target Role"
 
 
-st.divider()
-
 # ==============================================================================
 # 1. File Uploaders
 # ==============================================================================
@@ -61,6 +241,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Job Description")
+    st.caption("Upload the target job requirements and qualifications document.")
     jd_file = st.file_uploader(
         "Upload Job Description (PDF, DOCX, TXT, XML)",
         type=["pdf", "docx", "txt", "xml"],
@@ -71,6 +252,7 @@ with col1:
 
 with col2:
     st.subheader("2. Candidate Resumes")
+    st.caption("Upload candidate resumes (up to 20 files) to evaluate and rank.")
     resume_files = st.file_uploader(
         "Upload Resumes (PDF, DOCX, TXT, XML - up to 20)",
         type=["pdf", "docx", "txt", "xml"],
@@ -261,15 +443,13 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
                 f"The Hiring Team"
             )
             r_cols[3].markdown(
-                f'<a href="mailto:{cand_email}?subject={subj}&body={body}" target="_blank" '
-                f'style="display:inline-block; padding:4px 12px; background-color:#2563eb; color:#ffffff; '
-                f'text-decoration:none; border-radius:5px; font-weight:600; font-size:13px;">'
+                f'<a href="mailto:{cand_email}?subject={subj}&body={body}" target="_blank" class="send-mail-link">'
                 f'📧 Send Mail</a>',
                 unsafe_allow_html=True,
             )
         else:
             r_cols[2].write("—")
-            r_cols[3].markdown("📧 *No email found*", unsafe_allow_html=True)
+            r_cols[3].markdown('<span class="no-email-badge">📧 No email found</span>', unsafe_allow_html=True)
 
     st.divider()
 
@@ -326,14 +506,12 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
                         f"The Hiring Team"
                     )
                     st.markdown(
-                        f'<a href="mailto:{email}?subject={subj}&body={body}" target="_blank" '
-                        f'style="display:inline-block; padding:7px 16px; background-color:#2563eb; color:#ffffff; '
-                        f'text-decoration:none; border-radius:6px; font-weight:600; font-size:14px;">'
+                        f'<a href="mailto:{email}?subject={subj}&body={body}" target="_blank" class="send-mail-link">'
                         f'📧 Send Mail</a>',
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown("📧 *No email found*", unsafe_allow_html=True)
+                    st.markdown('<span class="no-email-badge">📧 No email found</span>', unsafe_allow_html=True)
             with col_act2:
                 if email and pd.notna(email) and str(email).strip():
                     st.caption(f"Candidate Contact: `{email}`")
