@@ -71,13 +71,33 @@ _CONTACT_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
-_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+_EMAIL_PATTERN = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+    re.IGNORECASE,
+)
 
 _PHONE_PATTERN = re.compile(
     r"(?:\b(?:phone|tel|mobile|cell)\s*[:\-\s]*)?"
     r"(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b",
     re.IGNORECASE,
 )
+
+
+def extract_email(resume_text: str) -> Optional[str]:
+    """
+    Extracts the first valid email address from resume text using regex.
+    Pattern: word chars, dots, hyphens, plus, percent before @, domain with valid TLD.
+
+    Args:
+        resume_text: Raw text of candidate resume.
+
+    Returns:
+        The first valid email address found (e.g. 'applicant@domain.com'), or None if not found.
+    """
+    if not resume_text or not isinstance(resume_text, str):
+        return None
+    match = _EMAIL_PATTERN.search(resume_text)
+    return match.group(0).strip() if match else None
 
 
 # ==============================================================================

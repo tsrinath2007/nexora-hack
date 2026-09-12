@@ -17,7 +17,7 @@ from keyword_match import (
     keyword_score,
 )
 from semantic_match import batch_semantic_scores, semantic_score
-from resume_quality import check_resume_completeness
+from resume_quality import check_resume_completeness, extract_email
 
 # ==============================================================================
 # Scoring Weight Constants
@@ -57,6 +57,7 @@ def rank_candidates(
     Returns:
         A pandas DataFrame sorted descending by final_score with columns:
         - candidate: Filename or candidate identifier
+        - email: Extracted candidate email address (or None)
         - final_score: Combined score (0.45*semantic + 0.45*keyword + 0.10*completeness)
         - semantic_score: Semantic similarity score in [0, 1]
         - keyword_score: Weighted keyword match score in [0, 1]
@@ -67,6 +68,7 @@ def rank_candidates(
     """
     column_names = [
         "candidate",
+        "email",
         "final_score",
         "semantic_score",
         "keyword_score",
@@ -91,6 +93,9 @@ def rank_candidates(
         # Retrieve semantic score
         sem_score = float(semantic_scores_dict.get(candidate_name, 0.0))
 
+        # Extract contact email
+        email = extract_email(resume_text)
+
         # Compute keyword match score and skill breakdowns
         resume_skills = extract_keywords_from_resume(resume_text)
         kw_result = keyword_score(jd_required, jd_preferred, resume_skills)
@@ -108,6 +113,7 @@ def rank_candidates(
 
         records.append({
             "candidate": candidate_name,
+            "email": email,
             "final_score": final_score,
             "semantic_score": sem_score,
             "keyword_score": kw_score,

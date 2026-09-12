@@ -175,9 +175,10 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         lambda lst: ", ".join(lst) if lst else "None"
     )
 
-    # Reorder columns to include completeness_score
+    # Reorder columns to include email and completeness_score
     display_cols = [
         "candidate",
+        "email",
         "final_score",
         "semantic_score",
         "keyword_score",
@@ -186,6 +187,8 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         "missing_required",
         "matched_preferred",
     ]
+    # Filter only available columns
+    display_cols = [col for col in display_cols if col in display_df.columns]
     display_df = display_df[display_cols]
 
     # Show interactive sortable table
@@ -193,6 +196,7 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         display_df,
         use_container_width=True,
         column_config={
+            "email": st.column_config.TextColumn("Email Address"),
             "final_score": st.column_config.ProgressColumn(
                 "Final Score",
                 format="%.2f",
