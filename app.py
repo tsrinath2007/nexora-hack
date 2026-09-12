@@ -11,7 +11,7 @@ try:
 except Exception:
     pass
 
-from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_text_any
+from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_text_any, dedup_files
 from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
 from explain import generate_top3_explanations
@@ -86,19 +86,40 @@ if run_button:
 
     # Check input sources
     if jd_file and resume_files:
-        with st.spinner("Extracting text from uploaded files..."):
+        # 1. Deduplicate uploaded resumes before extraction using shared parser.dedup_files
+        file_pairs = [(rf.name, rf) for rf in resume_files]
+        deduped_resumes = dedup_files(file_pairs)
+
+        # 2. Display deduplication details in UI and console
+        if deduped_resumes.dropped:
+            print(f"[DEDUP] Streamlit Upload: Resolved {len(deduped_resumes.dropped)} duplicate groups ({deduped_resumes.total_dropped} redundant files dropped).")
+            for stem, info in deduped_resumes.dropped.items():
+                print(f"  - Candidate '{stem}': KEPT '{info['kept']}', DROPPED {info['dropped']}")
+
+            st.info(
+                f"📋 **Resume Deduplication**: Detected **{len(resume_files)}** uploaded file(s) across "
+                f"**{len(deduped_resumes)}** unique candidate(s). "
+                f"Retained highest priority format (`.pdf > .docx > .txt > .xml`), dropping **{deduped_resumes.total_dropped}** redundant duplicate(s)."
+            )
+            with st.expander("🔍 View Deduplicated Candidates (Files Kept vs Dropped)", expanded=True):
+                for stem, info in deduped_resumes.dropped.items():
+                    st.markdown(f"**Candidate:** `{stem}`")
+                    st.write(f"- ✅ **Kept:** `{info['kept']}`")
+                    st.write(f"- ❌ **Dropped duplicate(s):** `{', '.join(info['dropped'])}`")
+
+        with st.spinner("Extracting text from deduplicated candidate files..."):
             try:
                 jd_text = extract_jd(jd_file)
             except Exception as e:
                 st.error(f"Error parsing JD file: {e}")
                 st.stop()
 
-            for rf in resume_files:
+            for fname, fobj in deduped_resumes:
                 try:
-                    text = extract_text_any(rf)
-                    resumes_dict[rf.name] = text
+                    text = extract_text_any(fobj)
+                    resumes_dict[fname] = text
                 except Exception as e:
-                    st.warning(f"Could not parse '{rf.name}': {e}")
+                    st.warning(f"Could not parse '{fname}': {e}")
 
     elif use_sample and sample_dir.exists():
         with st.spinner("Loading demo sample files..."):

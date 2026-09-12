@@ -318,6 +318,87 @@ def extract_jd(source: Union[str, Path, Any]) -> str:
         return extract_text_from_txt(source)
 
 
+class DedupResult(list):
+    """
+    A list of deduplicated (filename, file_object_or_path) pairs.
+    Includes metadata on dropped duplicate files:
+      - .dropped: Dict[str, Dict[str, Any]] mapping stem -> {'kept': filename, 'dropped': [filenames]}
+      - .total_dropped: int (count of dropped redundant files)
+    """
+    def __init__(self, items=None, dropped=None):
+        super().__init__(items or [])
+        self.dropped: Dict[str, Dict[str, Any]] = dropped or {}
+        self.total_dropped: int = sum(len(v["dropped"]) for v in self.dropped.values())
+
+
+def dedup_files(
+    file_list: List[Union[Tuple[str, Any], Any]],
+    verbose: bool = False,
+) -> DedupResult:
+    """
+    Deduplicates a collection of files or (filename, file_object_or_path) pairs.
+    Groups by base filename (stripping extension) and keeps only ONE file per group
+    according to priority: .pdf > .docx > .txt > .xml.
+
+    Args:
+        file_list: List of (filename, file_object_or_path) tuples/pairs,
+                   or objects with a '.name' attribute (e.g. Streamlit UploadedFile, Path).
+        verbose: If True, prints deduplication details to stdout.
+
+    Returns:
+        DedupResult (a list of kept (filename, file_object_or_path) pairs)
+        with .dropped metadata mapping stem -> {'kept': filename, 'dropped': [filenames]}.
+    """
+    # Normalize input into (filename, obj) pairs
+    normalized_pairs: List[Tuple[str, Any]] = []
+    for item in file_list:
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            fname, fobj = item
+            normalized_pairs.append((str(fname), fobj))
+        elif hasattr(item, "name"):
+            normalized_pairs.append((str(item.name), item))
+        elif isinstance(item, (str, Path)):
+            p = Path(item)
+            normalized_pairs.append((p.name, item))
+        else:
+            normalized_pairs.append((str(item), item))
+
+    # Group by base filename (stem)
+    groups: Dict[str, List[Tuple[str, Any]]] = defaultdict(list)
+    for fname, fobj in normalized_pairs:
+        stem = Path(fname).stem
+        groups[stem].append((fname, fobj))
+
+    kept_pairs: List[Tuple[str, Any]] = []
+    dropped_info: Dict[str, Dict[str, Any]] = {}
+
+    for stem in sorted(groups.keys()):
+        items = groups[stem]
+        chosen_pair = min(
+            items,
+            key=lambda pair: FORMAT_PRIORITY.get(Path(pair[0]).suffix.lower(), 99),
+        )
+        kept_pairs.append(chosen_pair)
+
+        dropped = [p for p in items if p != chosen_pair]
+        if dropped:
+            dropped_info[stem] = {
+                "kept": chosen_pair[0],
+                "dropped": [p[0] for p in dropped],
+            }
+
+    if verbose and dropped_info:
+        print("=" * 80)
+        print(f"DEDUPLICATION REPORT ({len(dropped_info)} duplicates resolved):")
+        for stem, info in dropped_info.items():
+            print(f"Candidate: '{stem}'")
+            print(f"  [KEPT]    {info['kept']}")
+            print(f"  [DROPPED] {', '.join(info['dropped'])}")
+        print("=" * 80)
+
+    return DedupResult(kept_pairs, dropped_info)
+
+
 def get_dedup_mapping(folder_path: Union[str, Path]) -> Dict[str, Dict[str, Any]]:
     """
     Computes the deduplication mapping for all candidate resume files in folder_path.
@@ -344,24 +425,8 @@ def get_dedup_mapping(folder_path: Union[str, Path]) -> Dict[str, Dict[str, Any]
             if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
 
-    candidates_files: Dict[str, List[Path]] = defaultdict(list)
-    for file_path in all_files:
-        candidates_files[file_path.stem].append(file_path)
-
-    mapping: Dict[str, Dict[str, Any]] = {}
-    for stem in sorted(candidates_files.keys()):
-        files_list = candidates_files[stem]
-        chosen_file = min(
-            files_list,
-            key=lambda f: FORMAT_PRIORITY.get(f.suffix.lower(), 99),
-        )
-        dropped_files = [f for f in files_list if f != chosen_file]
-        mapping[stem] = {
-            "kept": chosen_file.name,
-            "dropped": [f.name for f in dropped_files],
-        }
-
-    return mapping
+    res = dedup_files([(f.name, f) for f in all_files])
+    return res.dropped
 
 
 def extract_resumes(folder_path: Union[str, Path], verbose: bool = True) -> Dict[str, str]:
@@ -394,30 +459,17 @@ def extract_resumes(folder_path: Union[str, Path], verbose: bool = True) -> Dict
             if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
 
-    # Group files by base filename (stem)
-    candidates_files: Dict[str, List[Path]] = defaultdict(list)
-    for file_path in all_files:
-        candidates_files[file_path.stem].append(file_path)
+    # Run shared dedup_files logic on all discovered files
+    file_pairs = [(f.name, f) for f in all_files]
+    deduped = dedup_files(file_pairs)
 
     resumes: Dict[str, str] = ResumeDict()
-    dedup_report: List[tuple] = []
-
-    # Sort candidates by name and choose highest priority file per candidate
-    for stem in sorted(candidates_files.keys()):
-        files_list = candidates_files[stem]
-        chosen_file = min(
-            files_list,
-            key=lambda f: FORMAT_PRIORITY.get(f.suffix.lower(), 99),
-        )
-        dropped_files = [f for f in files_list if f != chosen_file]
-        if dropped_files:
-            dedup_report.append((stem, chosen_file, dropped_files))
-
+    for fname, fpath in deduped:
         try:
-            resumes[chosen_file.name] = extract_text_any(chosen_file)
+            resumes[fname] = extract_text_any(fpath)
         except Exception as e:
-            print(f"Warning: Failed to parse '{chosen_file.name}': {e}")
-            resumes[chosen_file.name] = ""
+            print(f"Warning: Failed to parse '{fname}': {e}")
+            resumes[fname] = ""
 
     # Print the deduplication mapping
     if verbose:
@@ -426,21 +478,20 @@ def extract_resumes(folder_path: Union[str, Path], verbose: bool = True) -> Dict
         print("=" * 80)
         print(f"Directory:              {folder}")
         print(f"Total files scanned:    {len(all_files)}")
-        print(f"Unique candidate stems: {len(candidates_files)}")
+        print(f"Unique candidate stems: {len(deduped)}")
         print(f"Priority order:         .pdf > .docx > .txt > .xml\n")
-        if dedup_report:
-            print(f"Duplicates Detected & Resolved ({len(dedup_report)} candidate groups):")
+        if deduped.dropped:
+            print(f"Duplicates Detected & Resolved ({len(deduped.dropped)} candidate groups):")
             print("-" * 80)
-            for stem, chosen_file, dropped_files in dedup_report:
-                dropped_str = ", ".join(f.name for f in dropped_files)
+            for stem, info in deduped.dropped.items():
+                dropped_str = ", ".join(info["dropped"])
                 print(f"Candidate: '{stem}'")
-                print(f"  [KEPT]    {chosen_file.name} ({chosen_file.suffix.upper()})")
+                print(f"  [KEPT]    {info['kept']}")
                 print(f"  [DROPPED] {dropped_str}\n")
             print("-" * 80)
-            total_dropped = sum(len(d) for _, _, d in dedup_report)
             print(
-                f"Deduplication summary: {total_dropped} redundant files dropped across "
-                f"{len(dedup_report)} candidate groups."
+                f"Deduplication summary: {deduped.total_dropped} redundant files dropped across "
+                f"{len(deduped.dropped)} candidate groups."
             )
         else:
             print("No duplicate formats detected among files.")
