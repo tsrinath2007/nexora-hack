@@ -1,7 +1,9 @@
 import io
 import sys
+import re
 import importlib
 from pathlib import Path
+from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 
@@ -15,7 +17,7 @@ from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_t
 from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
 from explain import generate_top3_explanations
-from resume_quality import check_resume_completeness
+from resume_quality import check_resume_completeness, extract_email
 
 # Page configuration
 st.set_page_config(
@@ -33,6 +35,22 @@ st.markdown(
     Supports **PDF**, **DOCX**, **TXT**, and **XML** formats.
     """
 )
+
+def get_jd_title(jd_name: str, jd_text: str) -> str:
+    """Extracts a clean Job Description title from JD text or filename."""
+    if jd_text:
+        for line in jd_text.splitlines()[:6]:
+            clean = line.strip()
+            m = re.match(r"^(?:job\s+title|title|role|position)\s*[:\-]\s*(.+)$", clean, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+    if jd_name:
+        stem = Path(jd_name).stem.replace("_", " ").replace("-", " ")
+        stem = re.sub(r"(?i)\s*(?:job\s+description|jd|job)\s*$", "", stem).strip()
+        if stem:
+            return stem.title()
+    return "Target Role"
+
 
 st.divider()
 
@@ -155,6 +173,10 @@ if run_button:
         ranked_df["completeness_score"] = completeness_col
         st.session_state["ranked_df"] = ranked_df
 
+        # Detect and store JD title for shortlist notifications
+        jd_display_name = jd_file.name if jd_file else ("Demo Job Description" if use_sample else "")
+        st.session_state["jd_title"] = get_jd_title(jd_display_name, jd_text)
+
 # ==============================================================================
 # 3. Results Display
 # ==============================================================================
@@ -209,6 +231,46 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         },
     )
 
+    # Quick Candidate Outreach (Shortlist Notifications)
+    st.markdown("##### ✉️ Quick Candidate Outreach")
+    st.caption("Click below to draft an automated shortlist invitation in your default mail app:")
+    outreach_df = ranked_df.head(3)
+    jd_title = st.session_state.get("jd_title", "Position")
+
+    outreach_header = st.columns([1, 4, 4, 3])
+    outreach_header[0].markdown("**Rank**")
+    outreach_header[1].markdown("**Candidate**")
+    outreach_header[2].markdown("**Email**")
+    outreach_header[3].markdown("**Action**")
+
+    for idx, (_, row) in enumerate(outreach_df.iterrows()):
+        r_cols = st.columns([1, 4, 4, 3])
+        r_cols[0].write(f"#{idx + 1}")
+        r_cols[1].write(f"**{row['candidate']}**")
+        cand_email = row.get("email")
+        if cand_email and pd.notna(cand_email) and str(cand_email).strip():
+            r_cols[2].write(f"`{cand_email}`")
+            subj = quote(f"You've been shortlisted - {jd_title}")
+            c_name = Path(str(row["candidate"])).stem.replace("_", " ")
+            body = quote(
+                f"Hi {c_name},\n\n"
+                f"Congratulations! You have been shortlisted for the {jd_title} position "
+                f"(Rank #{idx + 1}, Score: {row['final_score']:.2%}).\n\n"
+                f"We would like to invite you for an initial interview to discuss next steps.\n\n"
+                f"Best regards,\n"
+                f"The Hiring Team"
+            )
+            r_cols[3].markdown(
+                f'<a href="mailto:{cand_email}?subject={subj}&body={body}" target="_blank" '
+                f'style="display:inline-block; padding:4px 12px; background-color:#2563eb; color:#ffffff; '
+                f'text-decoration:none; border-radius:5px; font-weight:600; font-size:13px;">'
+                f'📧 Send Mail</a>',
+                unsafe_allow_html=True,
+            )
+        else:
+            r_cols[2].write("—")
+            r_cols[3].markdown("📧 *No email found*", unsafe_allow_html=True)
+
     st.divider()
 
     # ==============================================================================
@@ -234,6 +296,7 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
         final_score = row["final_score"]
         completeness = row.get("completeness_score", "N/A")
         explanation = top3_explanations[idx]
+        email = row.get("email")
 
         with st.expander(f"🏆 Rank #{idx + 1}: {candidate_name} (Score: {final_score:.2f})", expanded=(idx == 0)):
             st.markdown(f"**Explanation:** {explanation}")
@@ -246,3 +309,33 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
                 st.metric("Keyword Score", f"{row['keyword_score']:.2%}")
             with col_m4:
                 st.metric("Completeness", completeness)
+
+            st.markdown("---")
+            col_act1, col_act2 = st.columns([2, 5])
+            with col_act1:
+                if email and pd.notna(email) and str(email).strip():
+                    subj = quote(f"You've been shortlisted - {jd_title}")
+                    c_name = Path(str(candidate_name)).stem.replace("_", " ")
+                    body = quote(
+                        f"Hi {c_name},\n\n"
+                        f"Congratulations! After reviewing your resume against our {jd_title} role, "
+                        f"we are pleased to inform you that you have been ranked #{idx + 1} "
+                        f"with an overall score of {final_score:.2%}.\n\n"
+                        f"We would love to schedule an interview to discuss next steps.\n\n"
+                        f"Best regards,\n"
+                        f"The Hiring Team"
+                    )
+                    st.markdown(
+                        f'<a href="mailto:{email}?subject={subj}&body={body}" target="_blank" '
+                        f'style="display:inline-block; padding:7px 16px; background-color:#2563eb; color:#ffffff; '
+                        f'text-decoration:none; border-radius:6px; font-weight:600; font-size:14px;">'
+                        f'📧 Send Mail</a>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown("📧 *No email found*", unsafe_allow_html=True)
+            with col_act2:
+                if email and pd.notna(email) and str(email).strip():
+                    st.caption(f"Candidate Contact: `{email}`")
+                else:
+                    st.caption("No contact email detected in resume.")
