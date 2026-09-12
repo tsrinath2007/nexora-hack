@@ -8,6 +8,8 @@ Fully rule-based without LLM calls for complete auditability.
 """
 
 from __future__ import annotations
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 
@@ -626,6 +628,246 @@ def recommend_best_fit(
         paragraph=paragraph,
         closing=closing_sentence,
     )
+
+
+# ==============================================================================
+# Candidate Comparison & Query Parsing
+# ==============================================================================
+
+def compare_candidates(
+    row_a: Union[pd.Series, Dict[str, Any]],
+    row_b: Union[pd.Series, Dict[str, Any]],
+) -> str:
+    """
+    Compares two candidates and provides a direct, rule-based explanation
+    of why one candidate is ranked higher than the other.
+
+    Compares:
+    - Overall score and margin
+    - Key required technical skills differences (what A has that B lacks, and vice versa)
+    - Semantic alignment and domain relevance differences
+    - Structural completeness / documentation differences
+    - Direct concluding verdict
+
+    Args:
+        row_a: Ranking data for Candidate A.
+        row_b: Ranking data for Candidate B.
+
+    Returns:
+        Structured comparative explanation string.
+    """
+    cand_a_raw = str(row_a.get("candidate", "Candidate A"))
+    cand_b_raw = str(row_b.get("candidate", "Candidate B"))
+    cand_a = _clean_candidate_label(cand_a_raw)
+    cand_b = _clean_candidate_label(cand_b_raw)
+
+    score_a = float(row_a.get("final_score", 0.0))
+    score_b = float(row_b.get("final_score", 0.0))
+    sem_a = float(row_a.get("semantic_score", 0.0))
+    sem_b = float(row_b.get("semantic_score", 0.0))
+    kw_a = float(row_a.get("keyword_score", 0.0))
+    kw_b = float(row_b.get("keyword_score", 0.0))
+
+    req_a = set(row_a.get("matched_required", []))
+    req_b = set(row_b.get("matched_required", []))
+    missing_a = set(row_a.get("missing_required", []))
+    missing_b = set(row_b.get("missing_required", []))
+
+    # Who is the leader?
+    if score_a >= score_b:
+        leader_name, trailer_name = cand_a, cand_b
+        leader_score, trailer_score = score_a, score_b
+        leader_kw, trailer_kw = kw_a, kw_b
+        leader_sem, trailer_sem = sem_a, sem_b
+        leader_req_adv = req_a.intersection(missing_b)
+        trailer_req_adv = req_b.intersection(missing_a)
+        is_reverse_query = False
+    else:
+        leader_name, trailer_name = cand_b, cand_a
+        leader_score, trailer_score = score_b, score_a
+        leader_kw, trailer_kw = kw_b, kw_a
+        leader_sem, trailer_sem = sem_b, sem_a
+        leader_req_adv = req_b.intersection(missing_a)
+        trailer_req_adv = req_a.intersection(missing_b)
+        is_reverse_query = True
+
+    margin = abs(score_a - score_b)
+    margin_pts = round(margin * 100, 1)
+
+    points = []
+
+    # Point 1: Score & Rank Overview
+    if score_a == score_b:
+        points.append(
+            f"📊 **Score Comparison**: {cand_a} and {cand_b} are currently tied with an overall score of {score_a:.2f}."
+        )
+    elif is_reverse_query:
+        points.append(
+            f"📊 **Score Comparison**: Actually, {leader_name} ({leader_score:.2f}) is ranked ahead of "
+            f"{trailer_name} ({trailer_score:.2f}) by a margin of {margin_pts:.1f} percentage points."
+        )
+    else:
+        points.append(
+            f"📊 **Score Comparison**: {leader_name} is ranked higher with an overall score of {leader_score:.2f} "
+            f"compared to {trailer_name}'s {trailer_score:.2f} (a {margin_pts:.1f}-point lead)."
+        )
+
+    # Point 2: Technical & Required Skills Coverage
+    if leader_req_adv and not trailer_req_adv:
+        fmt_adv = _format_skill_list(sorted(leader_req_adv))
+        points.append(
+            f"⚡ **Technical Skill Coverage**: {leader_name} demonstrates verified proficiency in {fmt_adv}, "
+            f"which {trailer_name} is missing from their resume."
+        )
+    elif leader_req_adv and trailer_req_adv:
+        fmt_l = _format_skill_list(sorted(leader_req_adv))
+        fmt_t = _format_skill_list(sorted(trailer_req_adv))
+        points.append(
+            f"⚡ **Technical Skill Coverage**: {leader_name} covers key required skills that {trailer_name} lacks ({fmt_l}), "
+            f"whereas {trailer_name} only holds advantages in {fmt_t}."
+        )
+    elif not leader_req_adv and not trailer_req_adv:
+        if leader_kw > trailer_kw + 0.05:
+            points.append(
+                f"⚡ **Technical Proficiency**: Both candidates cover identical required skills, but {leader_name} demonstrates "
+                f"higher verified proficiency weighting (keyword match {leader_kw:.1%} vs {trailer_kw:.1%})."
+            )
+        else:
+            points.append(
+                f"⚡ **Technical Skill Coverage**: Both candidates demonstrate comparable core required skill matches "
+                f"(keyword match {leader_kw:.1%} vs {trailer_kw:.1%})."
+            )
+    else:
+        points.append(
+            f"⚡ **Technical Skill Coverage**: {leader_name} maintains a more balanced technical profile across required stack competencies."
+        )
+
+    # Point 3: Semantic Alignment & Project Relevance
+    diff_sem = leader_sem - trailer_sem
+    if diff_sem >= 0.03:
+        points.append(
+            f"🎯 **Contextual & Domain Depth**: {leader_name}'s project experience and work history demonstrate stronger "
+            f"semantic alignment with the role's qualitative scope (semantic similarity {leader_sem:.1%} vs {trailer_sem:.1%})."
+        )
+    elif diff_sem <= -0.03:
+        points.append(
+            f"🎯 **Contextual & Domain Depth**: While {trailer_name} exhibits slightly higher qualitative domain similarity "
+            f"({trailer_sem:.1%} vs {leader_sem:.1%}), this is outweighed by {leader_name}'s decisive technical skill advantages."
+        )
+    else:
+        points.append(
+            f"🎯 **Contextual & Domain Depth**: Both candidates show similar contextual relevance to the role "
+            f"({leader_sem:.1%} vs {trailer_sem:.1%})."
+        )
+
+    # Point 4: Structural Completeness
+    comp_val_l = row_a.get("completeness_score", "6/6") if not is_reverse_query else row_b.get("completeness_score", "6/6")
+    comp_val_t = row_b.get("completeness_score", "6/6") if not is_reverse_query else row_a.get("completeness_score", "6/6")
+    if str(comp_val_l) != str(comp_val_t):
+        points.append(
+            f"📋 **Resume Quality**: {leader_name} achieves a {comp_val_l} structural completeness score compared to "
+            f"{trailer_name}'s {comp_val_t}."
+        )
+
+    # Concluding Verdict
+    if leader_req_adv:
+        reason = f"broader required skill coverage (including {_format_skill_list(sorted(leader_req_adv))})"
+    elif leader_kw > trailer_kw:
+        reason = f"higher verified technical proficiency ({leader_kw:.1%} vs {trailer_kw:.1%})"
+    elif diff_sem >= 0.03:
+        reason = f"superior semantic alignment with the role description ({leader_sem:.1%} vs {trailer_sem:.1%})"
+    else:
+        reason = "a stronger combined balance of technical and qualitative criteria"
+
+    conclusion = f"🏆 **Verdict**: {leader_name} is the superior match for this role due to {reason}."
+    points.append(conclusion)
+
+    return "\n\n".join(points)
+
+
+def extract_two_candidates_from_query(
+    query: str,
+    candidates: List[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extracts two candidate identifiers from a recruiter's natural language question
+    by matching against known candidate filenames and clean aliases.
+
+    Returns:
+        (candidate_a, candidate_b) in the order they were mentioned in the query,
+        or (None, None) if exactly two unique candidates could not be identified.
+    """
+    import re
+    from collections import defaultdict
+
+    if not query or not query.strip() or len(candidates) < 2:
+        return None, None
+
+    alias_to_cands: Dict[str, Set[str]] = defaultdict(set)
+    for cand in candidates:
+        stem = Path(cand).stem.lower()
+        alias_to_cands[cand.lower()].add(cand)
+        alias_to_cands[stem].add(cand)
+        clean = _clean_candidate_label(cand).lower()
+        if clean:
+            alias_to_cands[clean].add(cand)
+
+        # Match CAND_xxx patterns
+        m = re.search(r"cand[_\-\s]*0*(\d+)", stem)
+        if m:
+            num = m.group(1)
+            int_num = int(num)
+            for variant in [
+                f"cand_{num}",
+                f"cand_{int_num:03d}",
+                f"cand-{num}",
+                f"cand-{int_num:03d}",
+                f"cand {num}",
+                f"cand {int_num:03d}",
+                f"cand{num}",
+                f"cand{int_num:03d}",
+                f"candidate {num}",
+                f"candidate {int_num:03d}",
+                f"candidate_{num}",
+                f"candidate_{int_num:03d}",
+            ]:
+                alias_to_cands[variant].add(cand)
+
+        # Extract name tokens (e.g. Aditya, Meera, Alice, Bob, Carol)
+        tokens = [
+            t for t in re.split(r"[_\-\s]+", stem)
+            if len(t) >= 3 and t not in {
+                "resume", "cv", "developer", "software", "engineer", "frontend",
+                "backend", "manager", "semantic", "data", "test", "candidate",
+            }
+        ]
+        for t in tokens:
+            alias_to_cands[t].add(cand)
+
+    # Filter to unique aliases only
+    unique_alias_map = {
+        alias: list(cands)[0]
+        for alias, cands in alias_to_cands.items()
+        if len(cands) == 1
+    }
+
+    q_lower = query.lower()
+    matches: Dict[str, int] = {}  # candidate -> earliest start index in query
+
+    # Match aliases sorted by length descending so longer phrases take precedence
+    for alias in sorted(unique_alias_map.keys(), key=len, reverse=True):
+        pattern = rf"\b{re.escape(alias)}\b"
+        match = re.search(pattern, q_lower)
+        if match:
+            cand = unique_alias_map[alias]
+            if cand not in matches or match.start() < matches[cand]:
+                matches[cand] = match.start()
+
+    if len(matches) == 2:
+        sorted_cands = sorted(matches.keys(), key=lambda c: matches[c])
+        return sorted_cands[0], sorted_cands[1]
+
+    return None, None
 
 
 # ==============================================================================

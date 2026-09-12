@@ -17,7 +17,13 @@ except Exception:
 from parser import extract_jd, extract_text_from_pdf, extract_resumes, extract_text_any, dedup_files
 from ranker import rank_candidates, SEMANTIC_WEIGHT, KEYWORD_WEIGHT
 COMPLETENESS_WEIGHT = getattr(ranker, "COMPLETENESS_WEIGHT", 0.10)
-from explain import generate_top3_explanations, recommend_best_fit
+from explain import (
+    generate_top3_explanations,
+    recommend_best_fit,
+    compare_candidates,
+    extract_two_candidates_from_query,
+    _clean_candidate_label,
+)
 from resume_quality import check_resume_completeness, extract_email
 from jd_bias_check import flag_jd_bias
 
@@ -266,6 +272,40 @@ st.markdown(
         display: flex;
         align-items: center;
         gap: 0.45rem;
+    }
+
+    /* Recruiter Q&A Chat Styling */
+    .chat-qa-card {
+        background-color: #232f42;
+        border: 1px solid #2e3e56;
+        border-radius: 12px;
+        padding: 1.15rem 1.35rem;
+        margin-top: 0.75rem;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    .chat-question-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        background-color: rgba(45, 212, 167, 0.12);
+        color: #2dd4a7;
+        font-weight: 600;
+        font-size: 0.88rem;
+        padding: 0.35rem 0.85rem;
+        border-radius: 999px;
+        margin-bottom: 0.6rem;
+        border: 1px solid rgba(45, 212, 167, 0.3);
+    }
+    .chat-bubble-response {
+        background-color: #1a2332;
+        border-left: 3.5px solid #2dd4a7;
+        border-radius: 4px 10px 10px 4px;
+        padding: 1.15rem 1.35rem;
+        color: #e2e8f0;
+        font-size: 0.94rem;
+        line-height: 1.65;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
     </style>
     """,
@@ -745,3 +785,103 @@ if "ranked_df" in st.session_state and not st.session_state["ranked_df"].empty:
                     st.caption(f"Candidate Contact: `{email}`")
                 else:
                     st.caption("No contact email detected in resume.")
+
+    st.divider()
+
+    # ==============================================================================
+    # 6. Recruiter Q&A & Head-to-Head Candidate Comparison
+    # ==============================================================================
+    st.subheader("💬 Ask About the Ranking & Compare Candidates")
+    st.markdown(
+        "Ask a natural language question comparing any two candidates (e.g., *'Why is CAND_001 ranked above CAND_003?'*), "
+        "or select candidates directly using the dropdowns below for an instant comparative breakdown."
+    )
+
+    all_candidate_files = ranked_df["candidate"].tolist()
+
+    # Recruiter Chat-style Q&A Input
+    user_query = st.text_input(
+        "Ask about the ranking",
+        placeholder="e.g. Why is CAND_001 ranked above CAND_003?",
+        key="recruiter_ranking_qa",
+    )
+
+    if user_query and user_query.strip():
+        cand_a_name, cand_b_name = extract_two_candidates_from_query(user_query, all_candidate_files)
+        if cand_a_name and cand_b_name:
+            row_a = ranked_df[ranked_df["candidate"] == cand_a_name].iloc[0]
+            row_b = ranked_df[ranked_df["candidate"] == cand_b_name].iloc[0]
+            comparison_answer = compare_candidates(row_a, row_b)
+
+            clean_a = _clean_candidate_label(cand_a_name)
+            clean_b = _clean_candidate_label(cand_b_name)
+            rank_a = all_candidate_files.index(cand_a_name) + 1
+            rank_b = all_candidate_files.index(cand_b_name) + 1
+
+            p_list = [p.strip() for p in comparison_answer.split("\n\n") if p.strip()]
+            p_html_list = "".join(
+                f'<div style="margin-bottom: 0.75rem;">{re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", p)}</div>'
+                for p in p_list
+            )
+
+            st.markdown(
+                f"""
+                <div class="chat-qa-card">
+                    <div class="chat-question-pill">💬 Recruiter Question: "{user_query.strip()}"</div>
+                    <div style="font-size: 0.86rem; color: #94a3b8; margin-bottom: 0.85rem;">
+                        Comparing <strong>{clean_a}</strong> (Rank #{rank_a}) vs <strong>{clean_b}</strong> (Rank #{rank_b}):
+                    </div>
+                    <div class="chat-bubble-response">
+                        {p_html_list}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info(
+                "💡 I couldn't identify two candidates in that question — try naming them directly, "
+                "e.g. *'Why is CAND_001 ranked above CAND_003?'*"
+            )
+
+    st.markdown("##### 🔍 Or Select Candidates Directly to Compare")
+    comp_col1, comp_col2 = st.columns(2)
+    with comp_col1:
+        selected_a = st.selectbox(
+            "Select Candidate A",
+            options=all_candidate_files,
+            index=0,
+            format_func=lambda c: f"#{all_candidate_files.index(c) + 1}: {_clean_candidate_label(c)}",
+            key="compare_cand_a",
+        )
+    with comp_col2:
+        default_b_idx = 1 if len(all_candidate_files) > 1 else 0
+        selected_b = st.selectbox(
+            "Select Candidate B",
+            options=all_candidate_files,
+            index=default_b_idx,
+            format_func=lambda c: f"#{all_candidate_files.index(c) + 1}: {_clean_candidate_label(c)}",
+            key="compare_cand_b",
+        )
+
+    if selected_a and selected_b:
+        if selected_a == selected_b:
+            st.caption("Please select two different candidates to view a head-to-head comparison.")
+        else:
+            with st.expander(
+                f"⚖️ Head-to-Head Breakdown: {_clean_candidate_label(selected_a)} vs {_clean_candidate_label(selected_b)}",
+                expanded=True,
+            ):
+                row_sel_a = ranked_df[ranked_df["candidate"] == selected_a].iloc[0]
+                row_sel_b = ranked_df[ranked_df["candidate"] == selected_b].iloc[0]
+                dropdown_comparison = compare_candidates(row_sel_a, row_sel_b)
+
+                p_list_dd = [p.strip() for p in dropdown_comparison.split("\n\n") if p.strip()]
+                p_html_dd = "".join(
+                    f'<div style="margin-bottom: 0.75rem;">{re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", p)}</div>'
+                    for p in p_list_dd
+                )
+                st.markdown(
+                    f'<div class="chat-bubble-response">{p_html_dd}</div>',
+                    unsafe_allow_html=True,
+                )
